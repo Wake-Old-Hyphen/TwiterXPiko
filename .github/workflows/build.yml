@@ -12,6 +12,8 @@ jobs:
   build:
     name: Build ${{ matrix.variant }}
     runs-on: ubuntu-latest
+    permissions:           # <-- ADD THIS LINE
+      contents: write      # <-- ADD THIS LINE
     strategy:
       fail-fast: false
       matrix:
@@ -249,6 +251,7 @@ jobs:
           java -jar tools/morphe-cli.jar patch \
             -p patches.mpp \
             -f \
+            --continue-on-error \
             -d "Bring back twitter" \
             -d "Dynamic color" \
             -o "Twitter-Piko-${{ steps.version.outputs.apk_version }}-arm64-v8a.apk" \
@@ -260,11 +263,11 @@ jobs:
           java -jar tools/morphe-cli.jar patch \
             -p patches.mpp \
             -f \
+            --continue-on-error \
             -d "Bring back twitter" \
             -d "Dynamic color" \
             -o twitter-patched-clone.apk \
             base-twitter.apk
-
       # 6. CLONE AND STRIP PERMISSIONS
       - name: Clone and Strip Permissions
         env:
