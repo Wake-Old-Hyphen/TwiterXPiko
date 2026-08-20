@@ -60,9 +60,28 @@ jobs:
 
       - name: Download ReVanced CLI
         run: |
+          echo "📥 Downloading ReVanced CLI..."
           mkdir -p tools
-          curl -sL "https://github.com/revanced/revanced-cli/releases/latest/download/revanced-cli-all.jar" -o tools/revanced-cli.jar
-
+          
+          # Try the correct URL format for latest release
+          curl -sL "https://github.com/revanced/revanced-cli/releases/latest/download/revanced-cli.jar" -o tools/revanced-cli.jar
+          
+          # Verify the file was downloaded and is valid
+          if [ ! -s tools/revanced-cli.jar ]; then
+            echo "❌ Failed to download revanced-cli.jar or file is empty!"
+            ls -lh tools/
+            exit 1
+          fi
+          
+          # Check if it's a valid JAR file (should start with PK for ZIP/JAR)
+          if ! file tools/revanced-cli.jar | grep -q "Java archive"; then
+            echo "❌ Downloaded file is not a valid JAR!"
+            file tools/revanced-cli.jar
+            exit 1
+          fi
+          
+          echo "✅ ReVanced CLI downloaded successfully!"
+          ls -lh tools/revanced-cli.jar
       - name: Install apkeep (Reliable APK Downloader)
         run: |
           wget -q https://github.com/EFForg/apkeep/releases/latest/download/apkeep-x86_64-unknown-linux-gnu
