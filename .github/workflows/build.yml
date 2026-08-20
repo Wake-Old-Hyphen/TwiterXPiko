@@ -45,7 +45,7 @@ jobs:
         run: |
           pip install requests beautifulsoup4
           sudo apt-get update
-          sudo apt-get install -y apktool
+          sudo apt-get install -y apktool jq
 
       - name: Install Android Build Tools
         run: |
@@ -58,46 +58,60 @@ jobs:
           sdkmanager "build-tools;34.0.0" > /dev/null 2>&1
           echo "$HOME/Android/Sdk/build-tools/34.0.0" >> $GITHUB_PATH
 
-      - name: Download ReVanced CLI
+      # 1. DOWNLOAD MORPHE CLI (Instead of ReVanced CLI)
+      - name: Download Morphe CLI
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "📥 Downloading ReVanced CLI..."
+          echo "📥 Downloading Morphe CLI..."
           mkdir -p tools
           
-          # Use GitHub API with token to avoid rate limits
-          RELEASE_INFO=$(curl -sL -H "Authorization: token $GITHUB_TOKEN" "https://api.github.com/repos/revanced/revanced-cli/releases/latest")
+          # Use GitHub API with token to find the latest morphe-cli .jar file
+          RELEASE_INFO=$(curl -sL -H "Authorization: token $GITHUB_TOKEN" "https://api.github.com/repos/MorpheApp/morphe-cli/releases/latest")
           
-          # Find the JAR file in the release assets
-          JAR_URL=$(echo "$RELEASE_INFO" | grep -o '"browser_download_url": "[^"]*\.jar"' | head -n 1 | cut -d'"' -f4)
+          JAR_URL=$(echo "$RELEASE_INFO" | grep -o '"browser_download_url": "[^"]*-all.jar"' | head -n 1 | cut -d'"' -f4)
           
           if [ -z "$JAR_URL" ]; then
-            echo "❌ Could not find JAR file in latest release!"
-            echo "Release info:"
-            echo "$RELEASE_INFO" | head -20
+            echo "❌ Could not find morphe-cli .jar in latest release!"
             exit 1
           fi
           
-          echo "Found JAR URL: $JAR_URL"
-          curl -sL "$JAR_URL" -o tools/revanced-cli.jar
+          echo "Found Morphe CLI URL: $JAR_URL"
+          curl -sL "$JAR_URL" -o tools/morphe-cli.jar
           
-          # Verify the file was downloaded and is valid
-          if [ ! -s tools/revanced-cli.jar ]; then
-            echo "❌ Failed to download revanced-cli.jar or file is empty!"
-            ls -lh tools/
+          if [ ! -s tools/morphe-cli.jar ]; then
+            echo "❌ Failed to download morphe-cli.jar!"
+            exit 1
+          fi
+          echo "✅ Morphe CLI downloaded successfully!"
+
+      # 2. DOWNLOAD PIKO PATCHES (.mpp format)
+      - name: Download Piko Patches (.mpp)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "📦 Downloading Piko patches..."
+          
+          if [ "${{ matrix.patch_channel }}" = "prerelease" ]; then
+            # Get the absolute latest release (including pre-releases)
+            RELEASE_INFO=$(curl -sL -H "Authorization: token $GITHUB_TOKEN" "https://api.github.com/repos/crimera/piko/releases" | jq -r '.[0]')
+          else
+            # Get the latest stable release
+            RELEASE_INFO=$(curl -sL -H "Authorization: token $GITHUB_TOKEN" "https://api.github.com/repos/crimera/piko/releases/latest")
+          fi
+          
+          PATCH_URL=$(echo "$RELEASE_INFO" | grep -o '"browser_download_url": "[^"]*\.mpp"' | head -n 1 | cut -d'"' -f4)
+          
+          if [ -z "$PATCH_URL" ]; then
+            echo "❌ Could not find .mpp patch file!"
             exit 1
           fi
           
-          # Check if it's a valid JAR file
-          if ! file tools/revanced-cli.jar | grep -qi "java archive\|zip archive"; then
-            echo "❌ Downloaded file is not a valid JAR!"
-            file tools/revanced-cli.jar
-            head -c 200 tools/revanced-cli.jar
-            exit 1
-          fi
-          
-          echo "✅ ReVanced CLI downloaded successfully!"
-          ls -lh tools/revanced-cli.jar
+          echo "Found patch URL: $PATCH_URL"
+          curl -sL "$PATCH_URL" -o patches.mpp
+          echo "✅ Patches downloaded successfully!"
+
+      # 3. DOWNLOAD TWITTER APK (using apkeep)
       - name: Install apkeep (Reliable APK Downloader)
         run: |
           wget -q https://github.com/EFForg/apkeep/releases/latest/download/apkeep-x86_64-unknown-linux-gnu
@@ -106,6 +120,123 @@ jobs:
 
       - name: Download Twitter APK
         run: |
+          echo "📥 Downloading Twitter APK..."
+          mkdir -p download_dir
+          
+          if [ "${{ matrix.apk_version }}" = "12.2.1" ]; then
+            echo "Attempting to download specific version 12.2.1..."
+            apkeep -a com.twitter.android@12.2.1 -d apk-pure download_dir || true
+          else
+            echo "Downloading latest version..."
+            apkeep -a com.twitter.android -d apk-pure download_dir
+          fi
+          
+          DOWNLOADED_FILE=$(find download_dir -type f | head -n 1)
+          
+          if [ -z "$DOWNLOADED_FILE" ] || [ ! -s "$DOWNLOADED_FILE" ]; then
+            echo "❌ Download failed or no file found in download_dir!"
+            ls -la download_dir
+            exit 1
+          fi
+          
+          echo "✅ Found downloaded file: $DOWNLOADED_FILE"
+          
+          # Handle XAPK files (bundles)
+          if [[ "$DOWNLOADED_FILE" == *.xapk ]]; then
+            echo "📦 Detected XAPK bundle, extracting..."
+            mkdir -p xapk_extracted
+            unzip -q "$DOWNLOADED_FILE" -d xapk_extracted
+            
+            BASE_APK=$(find xapk_extracted -name "*.apk" -type f | grep -v "split" | head -n 1)
+            if [ -z "$BASE_APK" ]; then
+              BASE_APK=$(find xapk_extracted -name "*.apk" -type f | head -n 1)
+            fi
+            
+            if [ -z "$BASE_APK" ]; then
+              echo "❌ No APK found inside XAPK!"
+              exit 1
+            fi
+            
+            echo "✅ Extracted base APK: $BASE_APK"
+            mv "$BASE_APK" base-twitter.apk
+          else
+            mv "$DOWNLOADED_FILE" base-twitter.apk
+          fi
+          
+          ls -lh base-twitter.apk
+          echo "✅ APK ready for patching!"
+
+      - name: Get APK Version
+        id: version
+        run: |
+          VERSION=$(aapt dump badging base-twitter.apk | grep "versionName" | cut -d"'" -f2)
+          echo "apk_version=$VERSION" >> $GITHUB_OUTPUT
+          echo "📱 Detected APK version: $VERSION"
+
+      # 4. PATCH TWITTER (Normal Version)
+      - name: Patch Twitter (Normal Version)
+        run: |
+          echo "🔧 Patching Twitter (${{ matrix.variant }}) - Normal version..."
+          java -jar tools/morphe-cli.jar patch \
+            -p patches.mpp \
+            -d "Bring back twitter" \
+            -d "Dynamic color" \
+            -o "Twitter-Piko-${{ steps.version.outputs.apk_version }}-arm64-v8a.apk" \
+            base-twitter.apk
+
+      # 5. PATCH TWITTER (Clone Base Version)
+      - name: Patch Twitter (Clone Version Base)
+        run: |
+          echo "🔧 Patching Twitter (${{ matrix.variant }}) - Clone base version..."
+          java -jar tools/morphe-cli.jar patch \
+            -p patches.mpp \
+            -d "Bring back twitter" \
+            -d "Dynamic color" \
+            -o twitter-patched-clone.apk \
+            base-twitter.apk
+
+      # 6. CLONE AND STRIP PERMISSIONS
+      - name: Clone and Strip Permissions
+        env:
+          PATCHED_APK_PATH: twitter-patched-clone.apk
+          TRACK: ${{ matrix.variant }}
+          APK_VERSION: ${{ steps.version.outputs.apk_version }}
+        run: python scripts/clone_and_strip.py
+
+      # 7. UPLOAD TO RELEASE
+      - name: Upload Both Versions to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            Twitter-Piko-${{ steps.version.outputs.apk_version }}-arm64-v8a.apk
+            Twitter-Z2-Piko-${{ steps.version.outputs.apk_version }}-arm64-v8a.apk
+          tag_name: ${{ matrix.variant }}-latest
+          name: "Twitter Piko - ${{ matrix.variant }}"
+          body: |
+            ## Twitter Piko ${{ matrix.variant }} Builds
+            
+            **Build Details:**
+            - APK Version: ${{ steps.version.outputs.apk_version }}
+            - Patch Channel: ${{ matrix.patch_channel }}
+            - Architecture: arm64-v8a only
+            
+            **Files:**
+            1. `Twitter-Piko-${{ steps.version.outputs.apk_version }}-arm64-v8a.apk` - Normal patched version
+            2. `Twitter-Z2-Piko-${{ steps.version.outputs.apk_version }}-arm64-v8a.apk` - Z² Clone (com.twitter.androie)
+            
+            **Excluded Patches:**
+            - Bring back twitter
+            - Dynamic color
+            
+            **Z² Clone Features:**
+            - Package: com.twitter.androie
+            - App Name: Z²
+            - Permissions: Stripped to 5 essential only
+            
+            ---
+            *Auto-built on ${{ github.run_id }}*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}        run: |
           echo "📥 Downloading Twitter APK..."
           mkdir -p download_dir
           
