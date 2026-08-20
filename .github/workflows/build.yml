@@ -63,8 +63,21 @@ jobs:
           echo "📥 Downloading ReVanced CLI..."
           mkdir -p tools
           
-          # Try the correct URL format for latest release
-          curl -sL "https://github.com/revanced/revanced-cli/releases/latest/download/revanced-cli.jar" -o tools/revanced-cli.jar
+          # Use GitHub API to find the latest release and get the correct JAR filename
+          RELEASE_INFO=$(curl -sL "https://api.github.com/repos/revanced/revanced-cli/releases/latest")
+          
+          # Find the JAR file in the release assets (could be revanced-cli.jar, revanced-cli-all.jar, or versioned)
+          JAR_URL=$(echo "$RELEASE_INFO" | grep -o '"browser_download_url": "[^"]*\.jar"' | head -n 1 | cut -d'"' -f4)
+          
+          if [ -z "$JAR_URL" ]; then
+            echo "❌ Could not find JAR file in latest release!"
+            echo "Release info:"
+            echo "$RELEASE_INFO" | head -20
+            exit 1
+          fi
+          
+          echo "Found JAR URL: $JAR_URL"
+          curl -sL "$JAR_URL" -o tools/revanced-cli.jar
           
           # Verify the file was downloaded and is valid
           if [ ! -s tools/revanced-cli.jar ]; then
@@ -73,10 +86,11 @@ jobs:
             exit 1
           fi
           
-          # Check if it's a valid JAR file (should start with PK for ZIP/JAR)
-          if ! file tools/revanced-cli.jar | grep -q "Java archive"; then
+          # Check if it's a valid JAR file
+          if ! file tools/revanced-cli.jar | grep -q "Java archive\|Zip archive"; then
             echo "❌ Downloaded file is not a valid JAR!"
             file tools/revanced-cli.jar
+            head -c 200 tools/revanced-cli.jar
             exit 1
           fi
           
