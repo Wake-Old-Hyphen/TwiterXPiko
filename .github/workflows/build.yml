@@ -143,7 +143,7 @@ jobs:
               apk_version = os.environ.get("APK_VERSION", "unknown")
               patch_version = os.environ.get("PATCH_VERSION", "unknown")
               prefix = "Twitter-Z2-Piko-" if mode == "clone" else "Twitter-Piko-"
-              final_apk = prefix + track + "-v" + apk_version + "-" + patch_version + "-arm64-v8a.apk
+              final_apk = prefix + track + "-v" + apk_version + "-" + patch_version + "-arm64-v8a.apk"
 
               keystore = "debug.keystore"
               if not os.path.exists(keystore):
