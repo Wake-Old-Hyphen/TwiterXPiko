@@ -148,6 +148,32 @@ jobs:
           VERSION=$(aapt dump badging base-twitter.apk | grep "versionName" | head -n 1 | sed -E "s/.*versionName='([^']+)'.*/\1/")
           echo "apk_version=$VERSION" >> $GITHUB_OUTPUT
           echo "📱 Detected APK version: $VERSION"
+      - name: Apply x-shim PairIP Bypass (XNAV Only)
+        if: matrix.apk_version == '12.2.1'
+        run: |
+          echo "🛡️ Applying x-shim for PairIP bypass..."
+          
+          # Download ReVanced CLI v3.1.1 (best for .jar bundles)
+          curl -sL "https://github.com/ReVanced/revanced-cli/releases/download/v3.1.1/revanced-cli-3.1.1-all.jar" -o revanced-cli.jar
+          
+          # Download x-shim directly from GitLab releases API
+          XSHIM_URL=$(curl -sL "https://gitlab.com/api/v4/projects/inotia00%2Fx-shim/releases" | jq -r '.[0].assets.links[] | select(.name | endswith(".jar")) | .url' | head -n 1)
+          
+          if [ -z "$XSHIM_URL" ] || [ "$XSHIM_URL" = "null" ]; then
+             echo "❌ Could not find x-shim .jar on GitLab"
+             exit 1
+          fi
+          
+          echo "Downloading x-shim from: $XSHIM_URL"
+          curl -sL "$XSHIM_URL" -o x-shim.jar
+          
+          # Patch with x-shim
+          echo "Patching base-twitter.apk with x-shim..."
+          java -jar revanced-cli.jar -a base-twitter.apk -b x-shim.jar -o base-twitter-xshim.apk
+          
+          # Overwrite base APK with the x-shim patched version
+          mv base-twitter-xshim.apk base-twitter.apk
+          echo "✅ x-shim applied! Proceeding to Piko patches."    
 
       - name: Patch Twitter (Normal Version)
         run: |
