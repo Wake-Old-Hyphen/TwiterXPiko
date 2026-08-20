@@ -162,31 +162,58 @@ jobs:
           echo "apk_version=$VERSION" >> $GITHUB_OUTPUT
           echo "📱 Detected APK version: $VERSION"
 
-      - name: Download Piko Patches
+      - name: Download Piko Patches (RVP format)
         run: |
-          PATCH_URL="https://revanced-external-bundles.brosssh.com/api/v2/bundle/crimera/piko/latest?channel=${{ matrix.patch_channel }}"
-          echo "📦 Downloading patches from: $PATCH_URL"
-          curl -sL "$PATCH_URL" -o patches.json
+          echo "📦 Downloading Piko patches..."
+          
+          # Get the latest release from crimera/piko
+          RELEASE_INFO=$(curl -sL "https://api.github.com/repos/crimera/piko/releases/latest")
+          
+          # Find the .rvp patch file URL
+          if [ "${{ matrix.patch_channel }}" = "prerelease" ]; then
+            # For prerelease, get the latest release (including prereleases)
+            RELEASE_INFO=$(curl -sL "https://api.github.com/repos/crimera/piko/releases" | jq -r '.[0]')
+          fi
+          
+          PATCH_URL=$(echo "$RELEASE_INFO" | grep -o '"browser_download_url": "[^"]*\.rvp"' | head -n 1 | cut -d'"' -f4)
+          
+          if [ -z "$PATCH_URL" ]; then
+            echo "❌ Could not find .rvp patch file!"
+            echo "Release info:"
+            echo "$RELEASE_INFO" | head -30
+            exit 1
+          fi
+          
+          echo "Found patch URL: $PATCH_URL"
+          curl -sL "$PATCH_URL" -o patches.rvp
+          
+          if [ ! -s patches.rvp ]; then
+            echo "❌ Failed to download patches!"
+            exit 1
+          fi
+          
+          echo "✅ Patches downloaded successfully!"
+          ls -lh patches.rvp
 
       - name: Patch Twitter (Normal Version)
         run: |
           echo "🔧 Patching Twitter (${{ matrix.variant }}) - Normal version..."
           java -jar tools/revanced-cli.jar patch \
             base-twitter.apk \
-            -b patches.json \
-            -o Twitter-Piko-${{ steps.version.outputs.apk_version }}-arm64-v8a.apk \
-            --exclude="bring-back-twitter" \
-            --exclude="dynamic-color"
+            -p patches.rvp \
+            -d "bring-back-twitter" \
+            -d "dynamic-color" \
+            -o "Twitter-Piko-${{ steps.version.outputs.apk_version }}-arm64-v8a.apk"
 
       - name: Patch Twitter (Clone Version Base)
         run: |
           echo "🔧 Patching Twitter (${{ matrix.variant }}) - Clone base version..."
           java -jar tools/revanced-cli.jar patch \
             base-twitter.apk \
-            -b patches.json \
-            -o twitter-patched-clone.apk \
-            --exclude="bring-back-twitter" \
-            --exclude="dynamic-color"
+            -p patches.rvp \
+            -d "bring-back-twitter" \
+            -d "dynamic-color" \
+            -o twitter-patched-clone.apk
 
       - name: Clone and Strip Permissions
         env:
