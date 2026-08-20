@@ -1,111 +1,29 @@
-name: Twitter Z² AutoBuild (6 Variants)
-
-on:
-  workflow_dispatch:
-  schedule:
-    - cron: '0 6 * * *' # Daily at 6 AM UTC
-
-env:
-  APP_NAME: twitter
-
-jobs:
-  build:
-    name: Build ${{ matrix.variant }}
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - variant: experimental
-            apk_version: latest
-            patch_channel: prerelease
-          - variant: stable
-            apk_version: recommended
-            patch_channel: stable
-          - variant: xnav
-            apk_version: "12.2.1"
-            patch_channel: prerelease
-    
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Setup Java 21
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '21'
-
-      - name: Install System Dependencies
-        run: |
-          pip install requests beautifulsoup4
-          sudo apt-get update
-          sudo apt-get install -y apktool
-
-      - name: Install Android Build Tools
-        run: |
-          wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
-          unzip -q commandlinetools-linux-11076708_latest.zip
-          mkdir -p $HOME/Android/Sdk/cmdline-tools/latest
-          mv cmdline-tools/* $HOME/Android/Sdk/cmdline-tools/latest/
-          export PATH=$PATH:$HOME/Android/Sdk/cmdline-tools/latest/bin
-          yes | sdkmanager --licenses > /dev/null 2>&1
-          sdkmanager "build-tools;34.0.0" > /dev/null 2>&1
-          echo "$HOME/Android/Sdk/build-tools/34.0.0" >> $GITHUB_PATH
-
-      - name: Download ReVanced CLI
-        run: |
-          mkdir -p tools
-          curl -sL "https://github.com/revanced/revanced-cli/releases/latest/download/revanced-cli-all.jar" -o tools/revanced-cli.jar
-
-      # THIS IS THE FIX: Use apkeep to bypass Cloudflare/APKMirror issues
-      - name: Install apkeep (Reliable APK Downloader)
-        run: |
-          wget -q https://github.com/EFForg/apkeep/releases/latest/download/apkeep-x86_64-unknown-linux-gnu
-          chmod +x apkeep-x86_64-unknown-linux-gnu
-          sudo mv apkeep-x86_64-unknown-linux-gnu /usr/local/bin/apkeep
-
-      - name: Download Twitter APK
+- name: Download Twitter APK
         run: |
           echo "📥 Downloading Twitter APK..."
+          mkdir -p download_dir
+          
           if [ "${{ matrix.apk_version }}" = "12.2.1" ]; then
-            # For old versions, apkeep sometimes struggles with APKPure history. 
-            # If it fails here, we fallback to a known working mirror or local file.
-            # For now, we try to pull it via apkeep's apk-pure backend.
-            apkeep -a com.twitter.android -d apk-pure -v 12.2.1 base-twitter.apk || \
-            echo "⚠️ Could not find 12.2.1 on apkeep. Please upload twitter-12.2.1.apk to the repo manually if this fails."
+            echo "Attempting to download specific version 12.2.1..."
+            # apkeep uses @version syntax for specific versions
+            apkeep -a com.twitter.android@12.2.1 -d apk-pure download_dir || true
           else
-            # Downloads the absolute latest version from APKPure
-            apkeep -a com.twitter.android -d apk-pure base-twitter.apk
+            echo "Downloading latest version..."
+            apkeep -a com.twitter.android -d apk-pure download_dir
           fi
           
-          # Verify download
-          if [ ! -s base-twitter.apk ]; then
-            echo "❌ Download failed or file is empty!"
+          # Find the downloaded APK and rename it
+          DOWNLOADED_APK=$(find download_dir -name "*.apk" -type f | head -n 1)
+          
+          if [ -z "$DOWNLOADED_APK" ] || [ ! -s "$DOWNLOADED_APK" ]; then
+            echo "❌ Download failed or no APK found in download_dir!"
+            ls -la download_dir
             exit 1
           fi
-          ls -lh base-twitter.apk
-
-      - name: Get APK Version
-        id: version
-        run: |
-          VERSION=$(aapt dump badging base-twitter.apk | grep "versionName" | cut -d"'" -f2)
-          echo "apk_version=$VERSION" >> $GITHUB_OUTPUT
-          echo "📱 Detected APK version: $VERSION"
-
-      - name: Download Piko Patches
-        run: |
-          PATCH_URL="https://revanced-external-bundles.brosssh.com/api/v2/bundle/crimera/piko/latest?channel=${{ matrix.patch_channel }}"
-          echo "📦 Downloading patches from: $PATCH_URL"
-          curl -sL "$PATCH_URL" -o patches.json
-
-      - name: Patch Twitter (Normal Version)
-        run: |
+          
+          echo "✅ Found APK: $DOWNLOADED_APK"
+          mv "$DOWNLOADED_APK" base-twitter.apk
+          ls -lh base-twitter.apk        run: |
           echo "🔧 Patching Twitter (${{ matrix.variant }}) - Normal version..."
           java -jar tools/revanced-cli.jar patch \
             base-twitter.apk \
