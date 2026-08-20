@@ -59,14 +59,16 @@ jobs:
           echo "$HOME/Android/Sdk/build-tools/34.0.0" >> $GITHUB_PATH
 
       - name: Download ReVanced CLI
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           echo "📥 Downloading ReVanced CLI..."
           mkdir -p tools
           
-          # Use GitHub API to find the latest release and get the correct JAR filename
-          RELEASE_INFO=$(curl -sL "https://api.github.com/repos/revanced/revanced-cli/releases/latest")
+          # Use GitHub API with token to avoid rate limits
+          RELEASE_INFO=$(curl -sL -H "Authorization: token $GITHUB_TOKEN" "https://api.github.com/repos/revanced/revanced-cli/releases/latest")
           
-          # Find the JAR file in the release assets (could be revanced-cli.jar, revanced-cli-all.jar, or versioned)
+          # Find the JAR file in the release assets
           JAR_URL=$(echo "$RELEASE_INFO" | grep -o '"browser_download_url": "[^"]*\.jar"' | head -n 1 | cut -d'"' -f4)
           
           if [ -z "$JAR_URL" ]; then
@@ -87,7 +89,7 @@ jobs:
           fi
           
           # Check if it's a valid JAR file
-          if ! file tools/revanced-cli.jar | grep -q "Java archive\|Zip archive"; then
+          if ! file tools/revanced-cli.jar | grep -qi "java archive\|zip archive"; then
             echo "❌ Downloaded file is not a valid JAR!"
             file tools/revanced-cli.jar
             head -c 200 tools/revanced-cli.jar
