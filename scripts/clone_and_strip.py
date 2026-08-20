@@ -76,16 +76,29 @@ def main():
     print(f"🔨 Rebuilding APK as {cloned_apk}...")
     subprocess.run(["apktool", "b", decoded_dir, "-o", cloned_apk, "--use-aapt2"], check=True)
 
+    apk_version = os.environ.get("APK_VERSION", "unknown")
+    patch_version = os.environ.get("PATCH_VERSION", "unknown")
+
     # 5. Sign the APK
     keystore = "debug.keystore"
     if not os.path.exists(keystore):
-        print("🔑 Generating debug keystore...")
         subprocess.run([
             "keytool", "-genkey", "-v", "-keystore", keystore,
             "-alias", "z2debug", "-keyalg", "RSA", "-keysize", "2048",
             "-validity", "10000", "-storepass", "android", "-keypass", "android",
             "-dname", "CN=Z2, OU=Z2, O=Z2, L=Z2, S=Z2, C=Z2"
         ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    # Apply the new naming convention: Twitter-Z2-Piko-v{app_version}-{patch_version}-arm64-v8a.apk
+    final_apk = f"Twitter-Z2-Piko-v{apk_version}-{patch_version}-arm64-v8a.apk"
+    
+    print(f"🖋️ Signing Cloned APK as {final_apk}...")
+    subprocess.run([
+        "apksigner", "sign", "--ks", keystore, "--ks-pass", "pass:android",
+        "--out", final_apk, cloned_apk
+    ], check=True)
+
+    print(f"🎉 SUCCESS! Cloned APK ready: {final_apk}")
 
     # Morphe-style naming: Twitter-Z2-Piko-{version}-arm64-v8a.apk
     final_apk = f"Twitter-Z2-Piko-{apk_version}-arm64-v8a.apk"
