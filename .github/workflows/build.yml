@@ -38,6 +38,7 @@ jobs:
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
+
       - name: Write Cloning Script (auto-generated, do not edit)
         run: |
           mkdir -p scripts
@@ -175,7 +176,7 @@ jobs:
           if __name__ == "__main__":
               main()
           PYEOF
-          python -c "import ast; ast.parse(open('scripts/clone_and_strip.py').read()); print('Script syntax OK')"  
+          python -c "import ast; ast.parse(open('scripts/clone_and_strip.py').read()); print('Script syntax OK')"
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -248,7 +249,7 @@ jobs:
           chmod +x apkeep-x86_64-unknown-linux-gnu
           sudo mv apkeep-x86_64-unknown-linux-gnu /usr/local/bin/apkeep
 
-      - name: Download Twitter APK & Merge Splits
+      - name: Download Twitter APK & Merge Splits (English only)
         id: apk_version_step
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -261,9 +262,22 @@ jobs:
           fi
           DOWNLOADED_FILE=$(find download_dir -type f \( -name "*.apk" -o -name "*.xapk" -o -name "*.apkm" \) | head -n 1)
           if [[ "$DOWNLOADED_FILE" == *.xapk ]] || [[ "$DOWNLOADED_FILE" == *.apkm ]]; then
-            mkdir -p xapk_extracted
+            mkdir -p xapk_extracted merge_dir
             unzip -q "$DOWNLOADED_FILE" -d xapk_extracted
-            java -jar tools/APKEditor.jar m -i xapk_extracted -o base-twitter-merged.apk
+
+            echo "🌐 Selecting splits: base + arm64-v8a + English + xxxhdpi..."
+            find xapk_extracted -maxdepth 2 -name "*.apk" ! -name "*split*" ! -name "*config.*" -exec cp {} merge_dir/ \;
+            find xapk_extracted -maxdepth 2 -name "*.apk" \( -name "*arm64_v8a*" -o -name "*arm64-v8a*" \) -exec cp {} merge_dir/ \;
+            find xapk_extracted -maxdepth 2 -name "*.apk" \( -name "*.en.apk" -o -name "*config.en.apk" \) -exec cp {} merge_dir/ \;
+            find xapk_extracted -maxdepth 2 -name "*xxxhdpi*.apk" -exec cp {} merge_dir/ \;
+            if ! ls merge_dir | grep -q "xxxhdpi"; then
+              find xapk_extracted -maxdepth 2 -name "*xxhdpi*.apk" -exec cp {} merge_dir/ \;
+            fi
+
+            echo "Selected splits:"
+            ls -lh merge_dir
+
+            java -jar tools/APKEditor.jar m -i merge_dir -o base-twitter-merged.apk
             mv base-twitter-merged.apk base-twitter.apk
           else
             mv "$DOWNLOADED_FILE" base-twitter.apk
@@ -277,14 +291,23 @@ jobs:
           echo "🛡️ Applying x-shim for PairIP bypass..."
           XSHIM_URL=$(curl -sL "https://gitlab.com/api/v4/projects/inotia00%2Fx-shim/releases" | jq -r '[.[] | .assets.links[] | select(.name | endswith(".mpp")) | .direct_asset_url // .url][0]')
           curl -sL "$XSHIM_URL" -o x-shim.mpp
-          java -jar tools/morphe-cli.jar patch -p x-shim.mpp -f --continue-on-error -o base-twitter-xshim.apk base-twitter.apk
+          java -jar tools/morphe-cli.jar patch -p x-shim.mpp -f --continue-on-error -o base-twitter-xshim.apk base-twitter.apk | tee xshim_log.txt
           mv base-twitter-xshim.apk base-twitter.apk
           echo "✅ x-shim applied!"
 
       - name: Patch Twitter (Normal Version)
         run: |
           FILENAME="Twitter-Piko-${{ matrix.track }}-v${{ steps.apk_version_step.outputs.apk_version }}-${{ steps.patches.outputs.patch_version }}-arm64-v8a.apk"
-          java -jar tools/morphe-cli.jar patch -p patches.mpp -f --continue-on-error -d "Bring back twitter" -d "Dynamic color" -o "$FILENAME" base-twitter.apk
+          java -jar tools/morphe-cli.jar patch -p patches.mpp -f --continue-on-error -d "Bring back twitter" -d "Dynamic color" -o "$FILENAME" base-twitter.apk | tee patch_out_normal.txt
+
+      - name: Strip Permissions (Normal Version)
+        env:
+          PATCHED_APK_PATH: Twitter-Piko-${{ matrix.track }}-v${{ steps.apk_version_step.outputs.apk_version }}-${{ steps.patches.outputs.patch_version }}-arm64-v8a.apk
+          MODE: strip
+          TRACK_LABEL: ${{ matrix.track }}
+          APK_VERSION: ${{ steps.apk_version_step.outputs.apk_version }}
+          PATCH_VERSION: ${{ steps.patches.outputs.patch_version }}
+        run: python -u scripts/clone_and_strip.py | tee strip_normal_log.txt
 
       - name: Patch Twitter (Clone Base)
         run: |
@@ -293,10 +316,46 @@ jobs:
       - name: Clone and Strip Permissions
         env:
           PATCHED_APK_PATH: twitter-patched-clone.apk
+          MODE: clone
           TRACK_LABEL: ${{ matrix.track }}
           APK_VERSION: ${{ steps.apk_version_step.outputs.apk_version }}
           PATCH_VERSION: ${{ steps.patches.outputs.patch_version }}
-        run: python -u scripts/clone_and_strip.py
+        run: python -u scripts/clone_and_strip.py | tee clone_log.txt
+
+      - name: Build Release Notes
+        run: |
+          APPV="${{ steps.apk_version_step.outputs.apk_version }}"
+          PATV="${{ steps.patches.outputs.patch_version }}"
+          {
+            echo "## Twitter Piko - ${{ matrix.variant }} (${{ matrix.track }})"
+            echo ""
+            echo "- **App version:** v$APPV"
+            echo "- **Piko bundle:** $PATV"
+            echo "- **Arch:** arm64-v8a | **Language:** English"
+            echo ""
+            if [ -f xshim_log.txt ]; then
+              echo "🛡️ **x-shim PairIP bypass applied first (v12.2.1 only):**"
+              grep "INFO: Applied:" xshim_log.txt | sed 's/.*INFO: Applied: */- /' || true
+              echo ""
+            fi
+            echo "### Twitter-Piko-${{ matrix.track }}-v$APPV-$PATV-arm64-v8a.apk"
+            echo ""
+            echo "**Applied patches:**"
+            grep "INFO: Applied:" patch_out_normal.txt | sed 's/.*INFO: Applied: */- /' || true
+            echo ""
+            echo "**Not applied (incompatible or failed):**"
+            grep -h "WARNING: Skipping\|SEVERE: FAILED:" patch_out_normal.txt | sed 's/.*WARNING: Skipping: */- /; s/.*SEVERE: FAILED: */- /' || true
+            echo ""
+            echo "**Permission hardening:**"
+            grep -h "Removed \|Renamed " strip_normal_log.txt | sed 's/^/- /' || true
+            echo ""
+            echo "### Twitter-Z2-Piko-${{ matrix.track }}-v$APPV-$PATV-arm64-v8a.apk"
+            echo ""
+            echo "All of the above, plus clone changes:"
+            grep -h "Removed \|Renamed " clone_log.txt | sed 's/^/- /' || true
+            echo "- Package renamed to com.twitter.androie (sharedUserId + label Z²)"
+          } > release_notes.md
+          cat release_notes.md
 
       - name: Upload Both Versions to Release
         uses: softprops/action-gh-release@v2
@@ -305,6 +364,7 @@ jobs:
             Twitter-Piko-${{ matrix.track }}-v${{ steps.apk_version_step.outputs.apk_version }}-${{ steps.patches.outputs.patch_version }}-arm64-v8a.apk
             Twitter-Z2-Piko-${{ matrix.track }}-v${{ steps.apk_version_step.outputs.apk_version }}-${{ steps.patches.outputs.patch_version }}-arm64-v8a.apk
           tag_name: ${{ matrix.variant }}-latest
-          name: "Twitter Piko - ${{ matrix.variant }}"
+          name: "Twitter Piko - ${{ matrix.variant }} (${{ matrix.track }})"
+          body_path: release_notes.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
