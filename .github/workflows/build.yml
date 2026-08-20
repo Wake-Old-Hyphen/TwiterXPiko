@@ -45,7 +45,17 @@ jobs:
         run: |
           pip install requests beautifulsoup4
           sudo apt-get update
-          sudo apt-get install -y apktool jq
+          sudo apt-get install -y jq
+          
+          # Download latest apktool from GitHub (instead of old Ubuntu repo version)
+          echo "📥 Downloading latest apktool..."
+          APKTOOL_VERSION="2.11.1"
+          curl -sL "https://github.com/iBotPeaches/Apktool/releases/download/v${APKTOOL_VERSION}/apktool_${APKTOOL_VERSION}.jar" -o /usr/local/bin/apktool.jar
+          curl -sL "https://raw.githubusercontent.com/iBotPeaches/Apktool/master/scripts/linux/apktool" -o /usr/local/bin/apktool
+          chmod +x /usr/local/bin/apktool
+          
+          echo "✅ apktool installed!"
+          apktool --version
 
       - name: Install Android Build Tools
         run: |
