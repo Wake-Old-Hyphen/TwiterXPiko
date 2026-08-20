@@ -117,8 +117,19 @@ jobs:
           wget -q https://github.com/EFForg/apkeep/releases/latest/download/apkeep-x86_64-unknown-linux-gnu
           chmod +x apkeep-x86_64-unknown-linux-gnu
           sudo mv apkeep-x86_64-unknown-linux-gnu /usr/local/bin/apkeep
-
-      - name: Download Twitter APK
+     
+      - name: Download APKEditor (for merging split APKs)
+        run: |
+          echo "📥 Downloading APKEditor..."
+          mkdir -p tools
+          curl -sL "https://github.com/REAndroid/APKEditor/releases/latest/download/APKEditor.jar" -o tools/APKEditor.jar
+          if [ ! -s tools/APKEditor.jar ]; then
+            echo "❌ Failed to download APKEditor!"
+            exit 1
+          fi
+          echo "✅ APKEditor downloaded!"
+          
+      - name: Download Twitter APK & Merge Splits
         run: |
           echo "📥 Downloading Twitter APK..."
           mkdir -p download_dir
@@ -147,25 +158,23 @@ jobs:
             mkdir -p xapk_extracted
             unzip -q "$DOWNLOADED_FILE" -d xapk_extracted
             
-            BASE_APK=$(find xapk_extracted -name "*.apk" -type f | grep -v "split" | head -n 1)
-            if [ -z "$BASE_APK" ]; then
-              BASE_APK=$(find xapk_extracted -name "*.apk" -type f | head -n 1)
-            fi
+            echo "🔀 Merging split APKs into a single full APK..."
+            # APKEditor merges the base and split configs into one valid APK
+            java -jar tools/APKEditor.jar m -i xapk_extracted -o base-twitter-merged.apk
             
-            if [ -z "$BASE_APK" ]; then
-              echo "❌ No APK found inside XAPK!"
+            if [ ! -s base-twitter-merged.apk ]; then
+              echo "❌ Failed to merge APKs!"
+              ls -la xapk_extracted
               exit 1
             fi
             
-            echo "✅ Extracted base APK: $BASE_APK"
-            mv "$BASE_APK" base-twitter.apk
+            mv base-twitter-merged.apk base-twitter.apk
+            echo "✅ Merged APK ready for patching!"
           else
             mv "$DOWNLOADED_FILE" base-twitter.apk
           fi
           
           ls -lh base-twitter.apk
-          echo "✅ APK ready for patching!"
-
       - name: Get APK Version
         id: version
         run: |
