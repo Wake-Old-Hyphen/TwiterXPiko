@@ -31,20 +31,26 @@ def main():
         app.set(ANDROID + "label", NEW_APP_NAME)
 
     removed = 0
+    renamed = 0
     for perm_type in ["uses-permission", "uses-permission-sdk-23"]:
         for perm in list(root.findall(perm_type)):
             perm_name = perm.get(ANDROID + "name")
-            if perm_name and perm_name not in ALLOWED_PERMISSIONS:
+            if not perm_name:
+                continue
+            if perm_name in ALLOWED_PERMISSIONS:
+                continue
+            if perm_name.startswith(OLD_PACKAGE):
+                perm.set(ANDROID + "name", perm_name.replace(OLD_PACKAGE, NEW_PACKAGE_NAME, 1))
+                renamed += 1
+            else:
                 root.remove(perm)
                 removed += 1
     print("Removed " + str(removed) + " requested permissions")
 
-    renamed = 0
     for perm in list(root.findall("permission")):
         perm_name = perm.get(ANDROID + "name")
         if perm_name and perm_name.startswith(OLD_PACKAGE):
-            new_name = perm_name.replace(OLD_PACKAGE, NEW_PACKAGE_NAME, 1)
-            perm.set(ANDROID + "name", new_name)
+            perm.set(ANDROID + "name", perm_name.replace(OLD_PACKAGE, NEW_PACKAGE_NAME, 1))
             renamed += 1
             print("Renamed declared permission: " + perm_name)
 
@@ -53,7 +59,28 @@ def main():
         if ref and ref.startswith(OLD_PACKAGE):
             element.set(ANDROID + "permission", ref.replace(OLD_PACKAGE, NEW_PACKAGE_NAME, 1))
             renamed += 1
-    print("Renamed " + str(renamed) + " permission declarations/references")
+    print("Renamed " + str(renamed) + " permission entries total")
+
+    # MANDATORY CHECK 1: manifest must contain no Twitter permissions
+    bad = []
+    for perm in list(root.findall("uses-permission")) + list(root.findall("uses-permission-sdk-23")):
+        name = perm.get(ANDROID + "name")
+        if name and name not in ALLOWED_PERMISSIONS and not name.startswith(NEW_PACKAGE_NAME):
+            bad.append(name)
+    for perm in root.findall("permission"):
+        name = perm.get(ANDROID + "name")
+        if name and name.startswith(OLD_PACKAGE):
+            bad.append(name)
+    for element in root.iter():
+        ref = element.get(ANDROID + "permission")
+        if ref and ref.startswith(OLD_PACKAGE):
+            bad.append(ref)
+    if bad:
+        print("❌ MANIFEST VERIFICATION FAILED - disallowed permissions remain:")
+        for b in bad:
+            print("   " + b)
+        sys.exit(1)
+    print("✅ Manifest verification passed")
 
     tree.write(manifest_path, encoding="utf-8", xml_declaration=True)
     print("Manifest saved")
@@ -84,6 +111,26 @@ def main():
 
     print("Signing APK...")
     subprocess.run(["apksigner", "sign", "--ks", keystore, "--ks-pass", "pass:android", "--out", final_apk, cloned_apk], check=True)
+
+    # MANDATORY CHECK 2: final signed APK must contain no Twitter permissions
+    result = subprocess.run(["aapt", "dump", "permissions", final_apk], capture_output=True, text=True)
+    bad_final = []
+    for line in result.stdout.splitlines():
+        line = line.strip()
+        if line.startswith("uses-permission:") and "name='" in line:
+            name = line.split("name='")[1].split("'")[0]
+            if name not in ALLOWED_PERMISSIONS and not name.startswith(NEW_PACKAGE_NAME):
+                bad_final.append(name)
+        if line.startswith("permission:") and OLD_PACKAGE in line:
+            bad_final.append(line)
+    if bad_final:
+        print("❌ FINAL APK VERIFICATION FAILED:")
+        for b in bad_final:
+            print("   " + b)
+        sys.exit(1)
+    print("✅ Final APK permissions verified clean:")
+    print(result.stdout)
+
     print("SUCCESS: " + final_apk)
     subprocess.run(["rm", "-rf", decoded_dir, cloned_apk])
 
