@@ -17,9 +17,7 @@ ANDROID_NS = {'android': 'http://schemas.android.com/apk/res/android'}
 ET.register_namespace('android', ANDROID_NS['android'])
 
 def main():
-    apk_file = os.environ.get("PATCHED_APK_PATH", "twitter-patched.apk")
-    variant = os.environ.get("TRACK", "stable")
-    apk_version = os.environ.get("APK_VERSION", "unknown")
+    apk_file = os.environ.get("PATCHED_APK_PATH", "twitter-patched-clone.apk")
     
     if not os.path.exists(apk_file):
         print(f"❌ Patched APK not found at {apk_file}")
@@ -76,12 +74,14 @@ def main():
     print(f"🔨 Rebuilding APK as {cloned_apk}...")
     subprocess.run(["apktool", "b", decoded_dir, "-o", cloned_apk, "--use-aapt2"], check=True)
 
+    # 5. Sign the APK
+    # Get versions from environment variables passed by GitHub Actions
     apk_version = os.environ.get("APK_VERSION", "unknown")
     patch_version = os.environ.get("PATCH_VERSION", "unknown")
 
-    # 5. Sign the APK
     keystore = "debug.keystore"
     if not os.path.exists(keystore):
+        print("🔑 Generating debug keystore...")
         subprocess.run([
             "keytool", "-genkey", "-v", "-keystore", keystore,
             "-alias", "z2debug", "-keyalg", "RSA", "-keysize", "2048",
@@ -99,13 +99,12 @@ def main():
     ], check=True)
 
     print(f"🎉 SUCCESS! Cloned APK ready: {final_apk}")
+    
+    # Clean up temporary files
+    subprocess.run(["rm", "-rf", decoded_dir, cloned_apk])
 
-    # Morphe-style naming: Twitter-Z2-Piko-{version}-arm64-v8a.apk
-    final_apk = f"Twitter-Z2-Piko-{apk_version}-arm64-v8a.apk"
-    print(f"🖋️ Signing APK as {final_apk}...")
-    subprocess.run([
-        "apksigner", "sign", "--ks", keystore, "--ks-pass", "pass:android",
-        "--out", final_apk, cloned_apk
+if __name__ == "__main__":
+    main()        "--out", final_apk, cloned_apk
     ], check=True)
 
     print(f"🎉 SUCCESS! Cloned APK ready: {final_apk}")
