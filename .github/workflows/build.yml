@@ -166,36 +166,59 @@ jobs:
           ls -lh tools/APKEditor.jar
           
       - name: Download Twitter APK & Merge Splits
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           echo "📥 Downloading Twitter APK..."
           mkdir -p download_dir
           
           if [ "${{ matrix.apk_version }}" = "12.2.1" ]; then
-            echo "Attempting to download specific version 12.2.1..."
-            apkeep -a com.twitter.android@12.2.1 -d apk-pure download_dir || true
+            echo "📦 Downloading v12.2.1 from GitHub Release assets..."
+            
+            # Get the release info and find the .apkm file
+            RELEASE_INFO=$(curl -sL -H "Authorization: token $GITHUB_TOKEN" \
+              "https://api.github.com/repos/${{ github.repository }}/releases/tags/apk-storage")
+            
+            # Search for the specific .apkm file
+            ASSET_URL=$(echo "$RELEASE_INFO" | grep -o '"browser_download_url": "[^"]*\.apkm"' | head -n 1 | cut -d'"' -f4)
+            
+            if [ -z "$ASSET_URL" ]; then
+              echo "❌ Could not find .apkm file in the 'apk-storage' release!"
+              echo "Release assets found:"
+              echo "$RELEASE_INFO" | grep -o '"name": "[^"]*"'
+              exit 1
+            fi
+            
+            echo "Found APK URL: $ASSET_URL"
+            curl -sL -H "Authorization: token $GITHUB_TOKEN" "$ASSET_URL" -o download_dir/twitter-12.2.1.apkm
+            
+            if [ ! -s download_dir/twitter-12.2.1.apkm ]; then
+              echo "❌ Download failed!"
+              exit 1
+            fi
+            
           else
             echo "Downloading latest version..."
             apkeep -a com.twitter.android -d apk-pure download_dir
           fi
           
-          DOWNLOADED_FILE=$(find download_dir -type f | head -n 1)
+          DOWNLOADED_FILE=$(find download_dir -type f \( -name "*.apk" -o -name "*.xapk" -o -name "*.apkm" \) | head -n 1)
           
           if [ -z "$DOWNLOADED_FILE" ] || [ ! -s "$DOWNLOADED_FILE" ]; then
-            echo "❌ Download failed or no file found in download_dir!"
+            echo "❌ Download failed or no file found!"
             ls -la download_dir
             exit 1
           fi
           
-          echo "✅ Found downloaded file: $DOWNLOADED_FILE"
+          echo "✅ Found file: $DOWNLOADED_FILE"
           
-          # Handle XAPK files (bundles)
-          if [[ "$DOWNLOADED_FILE" == *.xapk ]]; then
-            echo "📦 Detected XAPK bundle, extracting..."
+          # Handle bundle formats (XAPK, APKM)
+          if [[ "$DOWNLOADED_FILE" == *.xapk ]] || [[ "$DOWNLOADED_FILE" == *.apkm ]]; then
+            echo "📦 Detected bundle format, extracting..."
             mkdir -p xapk_extracted
             unzip -q "$DOWNLOADED_FILE" -d xapk_extracted
             
             echo "🔀 Merging split APKs into a single full APK..."
-            # APKEditor merges the base and split configs into one valid APK
             java -jar tools/APKEditor.jar m -i xapk_extracted -o base-twitter-merged.apk
             
             if [ ! -s base-twitter-merged.apk ]; then
@@ -211,6 +234,7 @@ jobs:
           fi
           
           ls -lh base-twitter.apk
+          echo "✅ APK ready for patching!"
       - name: Get APK Version
         id: version
         run: |
