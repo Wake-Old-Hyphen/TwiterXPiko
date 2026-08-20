@@ -5,34 +5,58 @@ import sys
 
 NEW_PACKAGE_NAME = "com.twitter.androie"
 NEW_APP_NAME = "Z²"
+OLD_PACKAGE = "com.twitter.android"
+ANDROID = "{http://schemas.android.com/apk/res/android}"
 ALLOWED_PERMISSIONS = ["android.permission.FOREGROUND_SERVICE", "android.permission.FOREGROUND_SERVICE_DATA_SYNC", "android.permission.INTERNET", "android.permission.ACCESS_NETWORK_STATE", "android.permission.ACCESS_WIFI_STATE"]
 
 def main():
     apk_file = os.environ.get("PATCHED_APK_PATH", "twitter-patched-clone.apk")
     if not os.path.exists(apk_file):
+        print("Patched APK not found")
         sys.exit(1)
 
     decoded_dir = "twitter_decoded"
-    subprocess.run(["apktool", "d", apk_file, "-o", decoded_dir, "-f", "--use-aapt2"], check=True)
+    print("Decoding APK...")
+    subprocess.run(["apktool", "d", apk_file, "-o", decoded_dir, "-f"], check=True)
 
     manifest_path = os.path.join(decoded_dir, "AndroidManifest.xml")
     tree = ET.parse(manifest_path)
     root = tree.getroot()
 
     root.set("package", NEW_PACKAGE_NAME)
-    root.set("{http://schemas.android.com/apk/res/android}sharedUserId", NEW_PACKAGE_NAME + ".shared")
+    root.set(ANDROID + "sharedUserId", NEW_PACKAGE_NAME + ".shared")
 
     app = root.find("application")
     if app is not None:
-        app.set("{http://schemas.android.com/apk/res/android}label", NEW_APP_NAME)
+        app.set(ANDROID + "label", NEW_APP_NAME)
 
+    removed = 0
     for perm_type in ["uses-permission", "uses-permission-sdk-23"]:
         for perm in list(root.findall(perm_type)):
-            perm_name = perm.get("{http://schemas.android.com/apk/res/android}name")
+            perm_name = perm.get(ANDROID + "name")
             if perm_name and perm_name not in ALLOWED_PERMISSIONS:
                 root.remove(perm)
+                removed += 1
+    print("Removed " + str(removed) + " requested permissions")
+
+    renamed = 0
+    for perm in list(root.findall("permission")):
+        perm_name = perm.get(ANDROID + "name")
+        if perm_name and perm_name.startswith(OLD_PACKAGE):
+            new_name = perm_name.replace(OLD_PACKAGE, NEW_PACKAGE_NAME, 1)
+            perm.set(ANDROID + "name", new_name)
+            renamed += 1
+            print("Renamed declared permission: " + perm_name)
+
+    for element in root.iter():
+        ref = element.get(ANDROID + "permission")
+        if ref and ref.startswith(OLD_PACKAGE):
+            element.set(ANDROID + "permission", ref.replace(OLD_PACKAGE, NEW_PACKAGE_NAME, 1))
+            renamed += 1
+    print("Renamed " + str(renamed) + " permission declarations/references")
 
     tree.write(manifest_path, encoding="utf-8", xml_declaration=True)
+    print("Manifest saved")
 
     strings_path = os.path.join(decoded_dir, "res", "values", "strings.xml")
     if os.path.exists(strings_path):
@@ -42,19 +66,25 @@ def main():
             if string.get("name") in ["app_name", "title", "name"]:
                 string.text = NEW_APP_NAME
         str_tree.write(strings_path, encoding="utf-8", xml_declaration=True)
+        print("App name changed to Z²")
 
     cloned_apk = "twitter-z2-cloned-unsigned.apk"
+    print("Rebuilding APK...")
     subprocess.run(["apktool", "b", decoded_dir, "-o", cloned_apk, "--use-aapt2"], check=True)
 
+    track = os.environ.get("TRACK_LABEL", "Unknown")
     apk_version = os.environ.get("APK_VERSION", "unknown")
     patch_version = os.environ.get("PATCH_VERSION", "unknown")
-    final_apk = "Twitter-Z2-Piko-v" + apk_version + "-" + patch_version + "-arm64-v8a.apk"
-    
+    final_apk = "Twitter-Z2-Piko-" + track + "-v" + apk_version + "-" + patch_version + "-arm64-v8a.apk"
+
     keystore = "debug.keystore"
     if not os.path.exists(keystore):
+        print("Generating keystore...")
         subprocess.run(["keytool", "-genkey", "-v", "-keystore", keystore, "-alias", "z2debug", "-keyalg", "RSA", "-keysize", "2048", "-validity", "10000", "-storepass", "android", "-keypass", "android", "-dname", "CN=Z2"], check=True)
 
+    print("Signing APK...")
     subprocess.run(["apksigner", "sign", "--ks", keystore, "--ks-pass", "pass:android", "--out", final_apk, cloned_apk], check=True)
+    print("SUCCESS: " + final_apk)
     subprocess.run(["rm", "-rf", decoded_dir, cloned_apk])
 
 if __name__ == "__main__":
