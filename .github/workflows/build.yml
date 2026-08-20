@@ -82,18 +82,45 @@ jobs:
             apkeep -a com.twitter.android -d apk-pure download_dir
           fi
           
-          # Find the downloaded APK and rename it
-          DOWNLOADED_APK=$(find download_dir -name "*.apk" -type f | head -n 1)
+          # Check what was downloaded
+          DOWNLOADED_FILE=$(find download_dir -type f | head -n 1)
           
-          if [ -z "$DOWNLOADED_APK" ] || [ ! -s "$DOWNLOADED_APK" ]; then
-            echo "❌ Download failed or no APK found in download_dir!"
+          if [ -z "$DOWNLOADED_FILE" ] || [ ! -s "$DOWNLOADED_FILE" ]; then
+            echo "❌ Download failed or no file found in download_dir!"
             ls -la download_dir
             exit 1
           fi
           
-          echo "✅ Found APK: $DOWNLOADED_APK"
-          mv "$DOWNLOADED_APK" base-twitter.apk
+          echo "✅ Found downloaded file: $DOWNLOADED_FILE"
+          
+          # Handle XAPK files (bundles)
+          if [[ "$DOWNLOADED_FILE" == *.xapk ]]; then
+            echo "📦 Detected XAPK bundle, extracting..."
+            mkdir -p xapk_extracted
+            unzip -q "$DOWNLOADED_FILE" -d xapk_extracted
+            
+            # Find the base APK (not a split APK)
+            BASE_APK=$(find xapk_extracted -name "*.apk" -type f | grep -v "split" | head -n 1)
+            
+            if [ -z "$BASE_APK" ]; then
+              BASE_APK=$(find xapk_extracted -name "*.apk" -type f | head -n 1)
+            fi
+            
+            if [ -z "$BASE_APK" ]; then
+              echo "❌ No APK found inside XAPK!"
+              ls -la xapk_extracted
+              exit 1
+            fi
+            
+            echo "✅ Extracted base APK: $BASE_APK"
+            mv "$BASE_APK" base-twitter.apk
+          else
+            # Regular APK file
+            mv "$DOWNLOADED_FILE" base-twitter.apk
+          fi
+          
           ls -lh base-twitter.apk
+          echo "✅ APK ready for patching!"
 
       - name: Get APK Version
         id: version
