@@ -27,7 +27,8 @@ def main():
     
     # 1. Decode APK
     print(f"🔓 Decoding {apk_file}...")
-    subprocess.run(["apktool", "d", apk_file, "-o", decoded_dir, "-f"], check=True)
+    decode_cmd = ["apktool", "d", apk_file, "-o", decoded_dir, "-f"]
+    subprocess.run(decode_cmd, check=True)
 
     # 2. Modify AndroidManifest.xml
     manifest_path = os.path.join(decoded_dir, "AndroidManifest.xml")
@@ -72,40 +73,34 @@ def main():
     # 4. Rebuild APK (using aapt2 for modern resource support)
     cloned_apk = "twitter-z2-cloned-unsigned.apk"
     print(f"🔨 Rebuilding APK as {cloned_apk}...")
-    subprocess.run(["apktool", "b", decoded_dir, "-o", cloned_apk, "--use-aapt2"], check=True)
+    build_cmd = ["apktool", "b", decoded_dir, "-o", cloned_apk, "--use-aapt2"]
+    subprocess.run(build_cmd, check=True)
 
     # 5. Sign the APK
-    # Get versions from environment variables passed by GitHub Actions
     apk_version = os.environ.get("APK_VERSION", "unknown")
     patch_version = os.environ.get("PATCH_VERSION", "unknown")
 
     keystore = "debug.keystore"
     if not os.path.exists(keystore):
         print("🔑 Generating debug keystore...")
-        subprocess.run([
-            "keytool", "-genkey", "-v", "-keystore", keystore,
-            "-alias", "z2debug", "-keyalg", "RSA", "-keysize", "2048",
-            "-validity", "10000", "-storepass", "android", "-keypass", "android",
-            "-dname", "CN=Z2, OU=Z2, O=Z2, L=Z2, S=Z2, C=Z2"
-        ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        keytool_cmd = ["keytool", "-genkey", "-v", "-keystore", keystore, "-alias", "z2debug", "-keyalg", "RSA", "-keysize", "2048", "-validity", "10000", "-storepass", "android", "-keypass", "android", "-dname", "CN=Z2, OU=Z2, O=Z2, L=Z2, S=Z2, C=Z2"]
+        subprocess.run(keytool_cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-    # Apply the new naming convention: Twitter-Z2-Piko-v{app_version}-{patch_version}-arm64-v8a.apk
+    # Apply the new naming convention
     final_apk = f"Twitter-Z2-Piko-v{apk_version}-{patch_version}-arm64-v8a.apk"
     
     print(f"🖋️ Signing Cloned APK as {final_apk}...")
-    subprocess.run([
-        "apksigner", "sign", "--ks", keystore, "--ks-pass", "pass:android",
-        "--out", final_apk, cloned_apk
-    ], check=True)
+    sign_cmd = ["apksigner", "sign", "--ks", keystore, "--ks-pass", "pass:android", "--out", final_apk, cloned_apk]
+    subprocess.run(sign_cmd, check=True)
 
     print(f"🎉 SUCCESS! Cloned APK ready: {final_apk}")
     
     # Clean up temporary files
-    subprocess.run(["rm", "-rf", decoded_dir, cloned_apk])
+    cleanup_cmd = ["rm", "-rf", decoded_dir, cloned_apk]
+    subprocess.run(cleanup_cmd)
 
 if __name__ == "__main__":
-    main()        "--out", final_apk, cloned_apk
-    ], check=True)
+    main()    ], check=True)
 
     print(f"🎉 SUCCESS! Cloned APK ready: {final_apk}")
     
