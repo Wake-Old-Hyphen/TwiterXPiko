@@ -119,15 +119,41 @@ jobs:
           sudo mv apkeep-x86_64-unknown-linux-gnu /usr/local/bin/apkeep
      
       - name: Download APKEditor (for merging split APKs)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           echo "📥 Downloading APKEditor..."
           mkdir -p tools
-          curl -sL "https://github.com/REAndroid/APKEditor/releases/latest/download/APKEditor.jar" -o tools/APKEditor.jar
+          
+          # Use GitHub API with token to find the latest APKEditor release
+          RELEASE_INFO=$(curl -sL -H "Authorization: token $GITHUB_TOKEN" "https://api.github.com/repos/REAndroid/APKEditor/releases/latest")
+          
+          # Find the .jar file URL in the release assets
+          JAR_URL=$(echo "$RELEASE_INFO" | grep -o '"browser_download_url": "[^"]*\.jar"' | head -n 1 | cut -d'"' -f4)
+          
+          if [ -z "$JAR_URL" ]; then
+            echo "❌ Could not find .jar file in APKEditor latest release!"
+            echo "$RELEASE_INFO" | head -20
+            exit 1
+          fi
+          
+          echo "Found APKEditor URL: $JAR_URL"
+          curl -sL "$JAR_URL" -o tools/APKEditor.jar
+          
           if [ ! -s tools/APKEditor.jar ]; then
             echo "❌ Failed to download APKEditor!"
             exit 1
           fi
-          echo "✅ APKEditor downloaded!"
+          
+          # Verify it's actually a JAR file and not an HTML error page
+          if ! file tools/APKEditor.jar | grep -qi "java archive\|zip archive"; then
+            echo "❌ Downloaded file is not a valid JAR!"
+            file tools/APKEditor.jar
+            exit 1
+          fi
+          
+          echo "✅ APKEditor downloaded successfully!"
+          ls -lh tools/APKEditor.jar
           
       - name: Download Twitter APK & Merge Splits
         run: |
