@@ -10,13 +10,10 @@ ALLOWED_PERMISSIONS = ["android.permission.FOREGROUND_SERVICE", "android.permiss
 def main():
     apk_file = os.environ.get("PATCHED_APK_PATH", "twitter-patched-clone.apk")
     if not os.path.exists(apk_file):
-        print("Patched APK not found")
         sys.exit(1)
 
     decoded_dir = "twitter_decoded"
-    
-    print("Decoding APK...")
-    subprocess.run(["apktool", "d", apk_file, "-o", decoded_dir, "-f", "--use-aapt2"])
+    subprocess.run(["apktool", "d", apk_file, "-o", decoded_dir, "-f", "--use-aapt2"], check=True)
 
     manifest_path = os.path.join(decoded_dir, "AndroidManifest.xml")
     tree = ET.parse(manifest_path)
@@ -29,16 +26,13 @@ def main():
     if app is not None:
         app.set("{http://schemas.android.com/apk/res/android}label", NEW_APP_NAME)
 
-    removed = 0
     for perm_type in ["uses-permission", "uses-permission-sdk-23"]:
         for perm in list(root.findall(perm_type)):
             perm_name = perm.get("{http://schemas.android.com/apk/res/android}name")
             if perm_name and perm_name not in ALLOWED_PERMISSIONS:
                 root.remove(perm)
-                removed += 1
 
     tree.write(manifest_path, encoding="utf-8", xml_declaration=True)
-    print("Manifest modified")
 
     strings_path = os.path.join(decoded_dir, "res", "values", "strings.xml")
     if os.path.exists(strings_path):
@@ -50,8 +44,7 @@ def main():
         str_tree.write(strings_path, encoding="utf-8", xml_declaration=True)
 
     cloned_apk = "twitter-z2-cloned-unsigned.apk"
-    print("Rebuilding APK...")
-    subprocess.run(["apktool", "b", decoded_dir, "-o", cloned_apk, "--use-aapt2"])
+    subprocess.run(["apktool", "b", decoded_dir, "-o", cloned_apk, "--use-aapt2"], check=True)
 
     apk_version = os.environ.get("APK_VERSION", "unknown")
     patch_version = os.environ.get("PATCH_VERSION", "unknown")
@@ -59,16 +52,10 @@ def main():
     
     keystore = "debug.keystore"
     if not os.path.exists(keystore):
-        subprocess.run(["keytool", "-genkey", "-v", "-keystore", keystore, "-alias", "z2debug", "-keyalg", "RSA", "-keysize", "2048", "-validity", "10000", "-storepass", "android", "-keypass", "android", "-dname", "CN=Z2"])
+        subprocess.run(["keytool", "-genkey", "-v", "-keystore", keystore, "-alias", "z2debug", "-keyalg", "RSA", "-keysize", "2048", "-validity", "10000", "-storepass", "android", "-keypass", "android", "-dname", "CN=Z2"], check=True)
 
-    print("Signing APK...")
-    subprocess.run(["apksigner", "sign", "--ks", keystore, "--ks-pass", "pass:android", "--out", final_apk, cloned_apk])
-
-    print("SUCCESS: " + final_apk)
+    subprocess.run(["apksigner", "sign", "--ks", keystore, "--ks-pass", "pass:android", "--out", final_apk, cloned_apk], check=True)
     subprocess.run(["rm", "-rf", decoded_dir, cloned_apk])
-
-if __name__ == "__main__":
-    main()    subprocess.run(["rm", "-rf", decoded_dir, cloned_apk])
 
 if __name__ == "__main__":
     main()
