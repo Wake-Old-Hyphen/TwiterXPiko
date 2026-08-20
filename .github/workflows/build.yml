@@ -122,10 +122,10 @@ jobs:
           
           if [ "${{ matrix.apk_version }}" = "12.2.1" ]; then
             echo "📦 Downloading v12.2.1 using gh CLI..."
-            # FIX 2: Use gh CLI to reliably download the .apkm file
-            gh release download apk-storage --pattern "*.apkm" --dir download_dir || {
-              echo "❌ Could not find .apkm file in the 'apk-storage' release!"
-              echo "Please ensure you have a PUBLISHED release tagged exactly 'apk-storage'."
+            # FIXED: Use the correct tag name 'v12.2.1-storage'
+            gh release download v12.2.1-storage --pattern "*.apkm" --dir download_dir || {
+              echo "❌ Could not find .apkm file in the 'v12.2.1-storage' release!"
+              echo "Please ensure you have a PUBLISHED release tagged exactly 'v12.2.1-storage'."
               exit 1
             }
           else
