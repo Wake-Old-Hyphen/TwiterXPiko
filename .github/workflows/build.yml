@@ -214,17 +214,18 @@ jobs:
           echo "🔧 Patching Twitter (${{ matrix.variant }}) - Normal version..."
           java -jar tools/morphe-cli.jar patch \
             -p patches.mpp \
+            -f \
             -d "Bring back twitter" \
             -d "Dynamic color" \
             -o "Twitter-Piko-${{ steps.version.outputs.apk_version }}-arm64-v8a.apk" \
             base-twitter.apk
 
-      # 5. PATCH TWITTER (Clone Base Version)
       - name: Patch Twitter (Clone Version Base)
         run: |
           echo "🔧 Patching Twitter (${{ matrix.variant }}) - Clone base version..."
           java -jar tools/morphe-cli.jar patch \
             -p patches.mpp \
+            -f \
             -d "Bring back twitter" \
             -d "Dynamic color" \
             -o twitter-patched-clone.apk \
