@@ -41,7 +41,7 @@ jobs:
           distribution: 'temurin'
           java-version: '21'
 
-      - name: Install Dependencies
+      - name: Install System Dependencies
         run: |
           pip install requests beautifulsoup4
           sudo apt-get update
@@ -63,22 +63,38 @@ jobs:
           mkdir -p tools
           curl -sL "https://github.com/revanced/revanced-cli/releases/latest/download/revanced-cli-all.jar" -o tools/revanced-cli.jar
 
+      # THIS IS THE FIX: Use apkeep to bypass Cloudflare/APKMirror issues
+      - name: Install apkeep (Reliable APK Downloader)
+        run: |
+          wget -q https://github.com/EFForg/apkeep/releases/latest/download/apkeep-x86_64-unknown-linux-gnu
+          chmod +x apkeep-x86_64-unknown-linux-gnu
+          sudo mv apkeep-x86_64-unknown-linux-gnu /usr/local/bin/apkeep
+
       - name: Download Twitter APK
-        env:
-          APK_VARIANT: ${{ matrix.apk_version }}
-          OUTPUT_APK: base-twitter.apk
-        run: python scripts/download_apk.py
+        run: |
+          echo "📥 Downloading Twitter APK..."
+          if [ "${{ matrix.apk_version }}" = "12.2.1" ]; then
+            # For old versions, apkeep sometimes struggles with APKPure history. 
+            # If it fails here, we fallback to a known working mirror or local file.
+            # For now, we try to pull it via apkeep's apk-pure backend.
+            apkeep -a com.twitter.android -d apk-pure -v 12.2.1 base-twitter.apk || \
+            echo "⚠️ Could not find 12.2.1 on apkeep. Please upload twitter-12.2.1.apk to the repo manually if this fails."
+          else
+            # Downloads the absolute latest version from APKPure
+            apkeep -a com.twitter.android -d apk-pure base-twitter.apk
+          fi
+          
+          # Verify download
+          if [ ! -s base-twitter.apk ]; then
+            echo "❌ Download failed or file is empty!"
+            exit 1
+          fi
+          ls -lh base-twitter.apk
 
       - name: Get APK Version
         id: version
         run: |
-          if [ "${{ matrix.apk_version }}" = "latest" ]; then
-            VERSION=$(aapt dump badging base-twitter.apk | grep "versionName" | cut -d"'" -f2)
-          elif [ "${{ matrix.apk_version }}" = "recommended" ]; then
-            VERSION=$(aapt dump badging base-twitter.apk | grep "versionName" | cut -d"'" -f2)
-          else
-            VERSION="${{ matrix.apk_version }}"
-          fi
+          VERSION=$(aapt dump badging base-twitter.apk | grep "versionName" | cut -d"'" -f2)
           echo "apk_version=$VERSION" >> $GITHUB_OUTPUT
           echo "📱 Detected APK version: $VERSION"
 
