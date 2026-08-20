@@ -71,10 +71,10 @@ def main():
         str_tree.write(strings_path, encoding="utf-8", xml_declaration=True)
         print("✅ App name changed to Z² in strings.xml!")
 
-    # 4. Rebuild APK
+    # 4. Rebuild APK (using aapt2 for modern resource support)
     cloned_apk = "twitter-z2-cloned-unsigned.apk"
     print(f"🔨 Rebuilding APK as {cloned_apk}...")
-    subprocess.run(["apktool", "b", decoded_dir, "-o", cloned_apk], check=True)
+    subprocess.run(["apktool", "b", decoded_dir, "-o", cloned_apk, "--use-aapt2"], check=True)
 
     # 5. Sign the APK
     keystore = "debug.keystore"
