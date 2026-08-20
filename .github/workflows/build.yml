@@ -1,9 +1,9 @@
 name: Twitter Z² AutoBuild (6 Variants)
 
 on:
-  workflow_dispatch:
+  workflow_dispatch: # Allows manual triggering
   schedule:
-    - cron: '0 6 * * *' # Daily at 6 AM UTC
+    - cron: '0 6 * * *' # Runs daily at 6 AM UTC
 
 env:
   APP_NAME: twitter
@@ -12,8 +12,8 @@ jobs:
   build:
     name: Build ${{ matrix.variant }}
     runs-on: ubuntu-latest
-    permissions:           # <-- ADD THIS LINE
-      contents: write      # <-- ADD THIS LINE
+    permissions:           # FIX 1: Grants permission to create releases
+      contents: write      
     strategy:
       fail-fast: false
       matrix:
@@ -48,16 +48,11 @@ jobs:
           pip install requests beautifulsoup4
           sudo apt-get update
           sudo apt-get install -y jq
-          
-          # Download latest apktool from GitHub (instead of old Ubuntu repo version)
           echo "📥 Downloading latest apktool..."
           APKTOOL_VERSION="2.11.1"
           curl -sL "https://github.com/iBotPeaches/Apktool/releases/download/v${APKTOOL_VERSION}/apktool_${APKTOOL_VERSION}.jar" -o /usr/local/bin/apktool.jar
           curl -sL "https://raw.githubusercontent.com/iBotPeaches/Apktool/master/scripts/linux/apktool" -o /usr/local/bin/apktool
           chmod +x /usr/local/bin/apktool
-          
-          echo "✅ apktool installed!"
-          apktool --version
 
       - name: Install Android Build Tools
         run: |
@@ -70,42 +65,125 @@ jobs:
           sdkmanager "build-tools;34.0.0" > /dev/null 2>&1
           echo "$HOME/Android/Sdk/build-tools/34.0.0" >> $GITHUB_PATH
 
-      # 1. DOWNLOAD MORPHE CLI (Instead of ReVanced CLI)
       - name: Download Morphe CLI
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           echo "📥 Downloading Morphe CLI..."
           mkdir -p tools
-          
-          # Use GitHub API with token to find the latest morphe-cli .jar file
           RELEASE_INFO=$(curl -sL -H "Authorization: token $GITHUB_TOKEN" "https://api.github.com/repos/MorpheApp/morphe-cli/releases/latest")
-          
           JAR_URL=$(echo "$RELEASE_INFO" | grep -o '"browser_download_url": "[^"]*-all.jar"' | head -n 1 | cut -d'"' -f4)
-          
-          if [ -z "$JAR_URL" ]; then
-            echo "❌ Could not find morphe-cli .jar in latest release!"
-            exit 1
-          fi
-          
-          echo "Found Morphe CLI URL: $JAR_URL"
+          if [ -z "$JAR_URL" ]; then exit 1; fi
           curl -sL "$JAR_URL" -o tools/morphe-cli.jar
-          
-          if [ ! -s tools/morphe-cli.jar ]; then
-            echo "❌ Failed to download morphe-cli.jar!"
-            exit 1
-          fi
-          echo "✅ Morphe CLI downloaded successfully!"
 
-      # 2. DOWNLOAD PIKO PATCHES (.mpp format)
       - name: Download Piko Patches (.mpp)
+        id: patches # Captures the patch version
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           echo "📦 Downloading Piko patches..."
-          
           if [ "${{ matrix.patch_channel }}" = "prerelease" ]; then
-            # Get the absolute latest release (including pre-releases)
+            RELEASE_INFO=$(curl -sL -H "Authorization: token $GITHUB_TOKEN" "https://api.github.com/repos/crimera/piko/releases" | jq -r '.[0]')
+          else
+            RELEASE_INFO=$(curl -sL -H "Authorization: token $GITHUB_TOKEN" "https://api.github.com/repos/crimera/piko/releases/latest")
+          fi
+          
+          PATCH_URL=$(echo "$RELEASE_INFO" | jq -r '.assets[] | select(.name | endswith(".mpp")) | .browser_download_url')
+          PATCH_TAG=$(echo "$RELEASE_INFO" | jq -r '.tag_name') # GET PATCH VERSION
+          
+          if [ -z "$PATCH_URL" ] || [ "$PATCH_URL" = "null" ]; then exit 1; fi
+          
+          echo "patch_version=$PATCH_TAG" >> $GITHUB_OUTPUT
+          echo "Found patch version: $PATCH_TAG"
+          curl -sL "$PATCH_URL" -o patches.mpp
+
+      - name: Download APKEditor
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p tools
+          RELEASE_INFO=$(curl -sL -H "Authorization: token $GITHUB_TOKEN" "https://api.github.com/repos/REAndroid/APKEditor/releases/latest")
+          JAR_URL=$(echo "$RELEASE_INFO" | grep -o '"browser_download_url": "[^"]*\.jar"' | head -n 1 | cut -d'"' -f4)
+          curl -sL "$JAR_URL" -o tools/APKEditor.jar
+
+      - name: Install apkeep
+        run: |
+          wget -q https://github.com/EFForg/apkeep/releases/latest/download/apkeep-x86_64-unknown-linux-gnu
+          chmod +x apkeep-x86_64-unknown-linux-gnu
+          sudo mv apkeep-x86_64-unknown-linux-gnu /usr/local/bin/apkeep
+
+      - name: Download Twitter APK & Merge Splits
+        id: apk_version_step # Captures the app version
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "📥 Downloading Twitter APK..."
+          mkdir -p download_dir
+          
+          if [ "${{ matrix.apk_version }}" = "12.2.1" ]; then
+            echo "📦 Downloading v12.2.1 using gh CLI..."
+            # FIX 2: Use gh CLI to reliably download the .apkm file
+            gh release download apk-storage --pattern "*.apkm" --dir download_dir || {
+              echo "❌ Could not find .apkm file in the 'apk-storage' release!"
+              echo "Please ensure you have a PUBLISHED release tagged exactly 'apk-storage'."
+              exit 1
+            }
+          else
+            apkeep -a com.twitter.android -d apk-pure download_dir
+          fi
+          
+          DOWNLOADED_FILE=$(find download_dir -type f \( -name "*.apk" -o -name "*.xapk" -o -name "*.apkm" \) | head -n 1)
+          
+          if [[ "$DOWNLOADED_FILE" == *.xapk ]] || [[ "$DOWNLOADED_FILE" == *.apkm ]]; then
+            echo "📦 Extracting and merging bundle..."
+            mkdir -p xapk_extracted
+            unzip -q "$DOWNLOADED_FILE" -d xapk_extracted
+            java -jar tools/APKEditor.jar m -i xapk_extracted -o base-twitter-merged.apk
+            mv base-twitter-merged.apk base-twitter.apk
+          else
+            mv "$DOWNLOADED_FILE" base-twitter.apk
+          fi
+          
+          # FIX 3: Robustly extract App Version
+          VERSION=$(aapt dump badging base-twitter.apk | grep "versionName" | head -n 1 | sed -E "s/.*versionName='([^']+)'.*/\1/")
+          echo "apk_version=$VERSION" >> $GITHUB_OUTPUT
+          echo "📱 Detected APK version: $VERSION"
+
+      - name: Patch Twitter (Normal Version)
+        run: |
+          # FIX 4: Use dynamic naming convention (App Version + Patch Version)
+          FILENAME="Twitter-Piko-v${{ steps.apk_version_step.outputs.apk_version }}-${{ steps.patches.outputs.patch_version }}-arm64-v8a.apk"
+          echo "🔧 Patching Normal version -> $FILENAME"
+          java -jar tools/morphe-cli.jar patch \
+            -p patches.mpp -f --continue-on-error \
+            -d "Bring back twitter" -d "Dynamic color" \
+            -o "$FILENAME" base-twitter.apk
+
+      - name: Patch Twitter (Clone Base)
+        run: |
+          java -jar tools/morphe-cli.jar patch \
+            -p patches.mpp -f --continue-on-error \
+            -d "Bring back twitter" -d "Dynamic color" \
+            -o twitter-patched-clone.apk base-twitter.apk
+
+      - name: Clone and Strip Permissions
+        env:
+          PATCHED_APK_PATH: twitter-patched-clone.apk
+          TRACK: ${{ matrix.variant }}
+          APK_VERSION: ${{ steps.apk_version_step.outputs.apk_version }}
+          PATCH_VERSION: ${{ steps.patches.outputs.patch_version }} # Pass patch version to python
+        run: python scripts/clone_and_strip.py
+
+      - name: Upload Both Versions to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            Twitter-Piko-v${{ steps.apk_version_step.outputs.apk_version }}-${{ steps.patches.outputs.patch_version }}-arm64-v8a.apk
+            Twitter-Z2-Piko-v${{ steps.apk_version_step.outputs.apk_version }}-${{ steps.patches.outputs.patch_version }}-arm64-v8a.apk
+          tag_name: ${{ matrix.variant }}-latest
+          name: "Twitter Piko - ${{ matrix.variant }}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}            # Get the absolute latest release (including pre-releases)
             RELEASE_INFO=$(curl -sL -H "Authorization: token $GITHUB_TOKEN" "https://api.github.com/repos/crimera/piko/releases" | jq -r '.[0]')
           else
             # Get the latest stable release
