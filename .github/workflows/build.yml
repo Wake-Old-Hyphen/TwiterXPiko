@@ -8,6 +8,7 @@ on:
 env:
   APP_NAME: twitter
   JAVA_TOOL_OPTIONS: "-Xmx5g"
+
 jobs:
   build:
     name: Build ${{ matrix.variant }}
@@ -140,6 +141,10 @@ jobs:
               print("Rebuilding APK...")
               subprocess.run(["apktool", "b", decoded_dir, "-o", processed_apk, "--use-aapt2"], check=True)
 
+              aligned_apk = "twitter-processed-aligned.apk"
+              print("Zipaligning APK (4-byte boundary)...")
+              subprocess.run(["zipalign", "-f", "4", processed_apk, aligned_apk], check=True)
+
               track = os.environ.get("TRACK_LABEL", "Unknown")
               apk_version = os.environ.get("APK_VERSION", "unknown")
               patch_version = os.environ.get("PATCH_VERSION", "unknown")
@@ -152,7 +157,7 @@ jobs:
                   subprocess.run(["keytool", "-genkey", "-v", "-keystore", keystore, "-alias", "z2debug", "-keyalg", "RSA", "-keysize", "2048", "-validity", "10000", "-storepass", "android", "-keypass", "android", "-dname", "CN=Z2"], check=True)
 
               print("Signing APK...")
-              subprocess.run(["apksigner", "sign", "--ks", keystore, "--ks-pass", "pass:android", "--out", final_apk, processed_apk], check=True)
+              subprocess.run(["apksigner", "sign", "--ks", keystore, "--ks-pass", "pass:android", "--out", final_apk, aligned_apk], check=True)
 
               result = subprocess.run(["aapt", "dump", "permissions", final_apk], capture_output=True, text=True)
               bad_final = []
@@ -171,7 +176,7 @@ jobs:
               print(result.stdout)
 
               print("SUCCESS: " + final_apk)
-              subprocess.run(["rm", "-rf", decoded_dir, processed_apk])
+              subprocess.run(["rm", "-rf", decoded_dir, processed_apk, aligned_apk])
 
           if __name__ == "__main__":
               main()
