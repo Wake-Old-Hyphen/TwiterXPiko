@@ -7,7 +7,7 @@ on:
 
 env:
   APP_NAME: twitter
-  JAVA_TOOL_OPTIONS: "-Xmx5g"
+  JAVA_TOOL_OPTIONS: "-Xmx6g"
 
 jobs:
   init-release:
