@@ -10,29 +10,48 @@ env:
   JAVA_TOOL_OPTIONS: "-Xmx5g"
 
 jobs:
+  init-release:
+    name: Ensure Release Exists
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Create release if missing (never touches existing assets)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: auto-builds
+          name: "Twitter Piko AutoBuilds"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   build:
     name: Build ${{ matrix.variant }}
     runs-on: ubuntu-latest
+    needs: init-release
     permissions:
       contents: write
     strategy:
       fail-fast: false
       matrix:
         include:
-          - variant: experimental
-            track: Dev
-            apk_version: latest
-            patch_channel: prerelease
-          - variant: stable
-            track: Stable
+          - variant: recommended-stable
+            app_token: Recommended
+            piko_token: StablePiko
             apk_version: recommended
             patch_channel: stable
+          - variant: latest-dev
+            app_token: Latest
+            piko_token: DevPiko
+            apk_version: latest
+            patch_channel: prerelease
           - variant: xnav-stable
-            track: XNAV-Stable
+            app_token: XNAV
+            piko_token: StablePiko
             apk_version: "12.2.1"
             patch_channel: stable
           - variant: xnav-dev
-            track: XNAV-Dev
+            app_token: XNAV
+            piko_token: DevPiko
             apk_version: "12.2.1"
             patch_channel: prerelease
 
@@ -145,11 +164,12 @@ jobs:
               print("Zipaligning APK (4-byte boundary)...")
               subprocess.run(["zipalign", "-f", "4", processed_apk, aligned_apk], check=True)
 
-              track = os.environ.get("TRACK_LABEL", "Unknown")
+              app_token = os.environ.get("APP_TOKEN", "Unknown")
+              piko_token = os.environ.get("PIKO_TOKEN", "Unknown")
               apk_version = os.environ.get("APK_VERSION", "unknown")
               patch_version = os.environ.get("PATCH_VERSION", "unknown")
-              prefix = "Twitter-Z2-Piko-" if mode == "clone" else "Twitter-Piko-"
-              final_apk = prefix + track + "-v" + apk_version + "-" + patch_version + "-arm64-v8a.apk"
+              prefix = ("Twitter-Z2-Piko-" if mode == "clone" else "Twitter-Piko-") + app_token + "-" + piko_token + "-"
+              final_apk = prefix + "v" + apk_version + "-" + patch_version + "-arm64-v8a.apk"
 
               keystore = "debug.keystore"
               if not os.path.exists(keystore):
@@ -302,14 +322,15 @@ jobs:
 
       - name: Patch Twitter (Normal Version)
         run: |
-          FILENAME="Twitter-Piko-${{ matrix.track }}-v${{ steps.apk_version_step.outputs.apk_version }}-${{ steps.patches.outputs.patch_version }}-arm64-v8a.apk"
+          FILENAME="Twitter-Piko-${{ matrix.app_token }}-${{ matrix.piko_token }}-v${{ steps.apk_version_step.outputs.apk_version }}-${{ steps.patches.outputs.patch_version }}-arm64-v8a.apk"
           java -jar tools/morphe-cli.jar patch -p patches.mpp -f --continue-on-error -d "Bring back twitter" -d "Dynamic color" -o "$FILENAME" base-twitter.apk | tee patch_out_normal.txt
 
       - name: Strip Permissions (Normal Version)
         env:
-          PATCHED_APK_PATH: Twitter-Piko-${{ matrix.track }}-v${{ steps.apk_version_step.outputs.apk_version }}-${{ steps.patches.outputs.patch_version }}-arm64-v8a.apk
+          PATCHED_APK_PATH: Twitter-Piko-${{ matrix.app_token }}-${{ matrix.piko_token }}-v${{ steps.apk_version_step.outputs.apk_version }}-${{ steps.patches.outputs.patch_version }}-arm64-v8a.apk
           MODE: strip
-          TRACK_LABEL: ${{ matrix.track }}
+          APP_TOKEN: ${{ matrix.app_token }}
+          PIKO_TOKEN: ${{ matrix.piko_token }}
           APK_VERSION: ${{ steps.apk_version_step.outputs.apk_version }}
           PATCH_VERSION: ${{ steps.patches.outputs.patch_version }}
         run: python -u scripts/clone_and_strip.py | tee strip_normal_log.txt
@@ -322,7 +343,8 @@ jobs:
         env:
           PATCHED_APK_PATH: twitter-patched-clone.apk
           MODE: clone
-          TRACK_LABEL: ${{ matrix.track }}
+          APP_TOKEN: ${{ matrix.app_token }}
+          PIKO_TOKEN: ${{ matrix.piko_token }}
           APK_VERSION: ${{ steps.apk_version_step.outputs.apk_version }}
           PATCH_VERSION: ${{ steps.patches.outputs.patch_version }}
         run: python -u scripts/clone_and_strip.py | tee clone_log.txt
@@ -331,19 +353,19 @@ jobs:
         run: |
           APPV="${{ steps.apk_version_step.outputs.apk_version }}"
           PATV="${{ steps.patches.outputs.patch_version }}"
+          NF="Twitter-Piko-${{ matrix.app_token }}-${{ matrix.piko_token }}-v$APPV-$PATV-arm64-v8a.apk"
+          CF="Twitter-Z2-Piko-${{ matrix.app_token }}-${{ matrix.piko_token }}-v$APPV-$PATV-arm64-v8a.apk"
           {
-            echo "## Twitter Piko - ${{ matrix.variant }} (${{ matrix.track }})"
+            echo "### ${{ matrix.app_token }} app + ${{ matrix.piko_token }}"
             echo ""
-            echo "- **App version:** v$APPV"
-            echo "- **Piko bundle:** $PATV"
-            echo "- **Arch:** arm64-v8a | **Language:** English"
+            echo "- **App version:** v$APPV | **Piko bundle:** $PATV | **Arch:** arm64-v8a | **Lang:** English"
             echo ""
             if [ -f xshim_log.txt ]; then
               echo "🛡️ **x-shim PairIP bypass applied first (v12.2.1 only):**"
               grep "INFO: Applied:" xshim_log.txt | sed 's/.*INFO: Applied: */- /' || true
               echo ""
             fi
-            echo "### Twitter-Piko-${{ matrix.track }}-v$APPV-$PATV-arm64-v8a.apk"
+            echo "#### $NF"
             echo ""
             echo "**Applied patches:**"
             grep "INFO: Applied:" patch_out_normal.txt | sed 's/.*INFO: Applied: */- /' || true
@@ -354,22 +376,73 @@ jobs:
             echo "**Permission hardening:**"
             grep -h "Removed \|Renamed " strip_normal_log.txt | sed 's/^/- /' || true
             echo ""
-            echo "### Twitter-Z2-Piko-${{ matrix.track }}-v$APPV-$PATV-arm64-v8a.apk"
+            echo "#### $CF"
             echo ""
             echo "All of the above, plus clone changes:"
             grep -h "Removed \|Renamed " clone_log.txt | sed 's/^/- /' || true
             echo "- Package renamed to com.twitter.androie (sharedUserId + label Z²)"
           } > release_notes.md
-          cat release_notes.md
 
-      - name: Upload Both Versions to Release
+      - name: Upload Notes Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-notes-${{ matrix.variant }}
+          path: release_notes.md
+
+      - name: Upload APKs to Accumulating Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: auto-builds
           files: |
-            Twitter-Piko-${{ matrix.track }}-v${{ steps.apk_version_step.outputs.apk_version }}-${{ steps.patches.outputs.patch_version }}-arm64-v8a.apk
-            Twitter-Z2-Piko-${{ matrix.track }}-v${{ steps.apk_version_step.outputs.apk_version }}-${{ steps.patches.outputs.patch_version }}-arm64-v8a.apk
-          tag_name: ${{ matrix.variant }}-latest
-          name: "Twitter Piko - ${{ matrix.variant }} (${{ matrix.track }})"
-          body_path: release_notes.md
+            Twitter-Piko-${{ matrix.app_token }}-${{ matrix.piko_token }}-v${{ steps.apk_version_step.outputs.apk_version }}-${{ steps.patches.outputs.patch_version }}-arm64-v8a.apk
+            Twitter-Z2-Piko-${{ matrix.app_token }}-${{ matrix.piko_token }}-v${{ steps.apk_version_step.outputs.apk_version }}-${{ steps.patches.outputs.patch_version }}-arm64-v8a.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  publish-notes:
+    name: Publish Cumulative Release Notes
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      contents: write
+    steps:
+      - name: Download notes artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: notes
+          pattern: release-notes-*
+
+      - name: Compose changelog (newest first, keep last 10 runs)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          RUN_DATE=$(date -u +"%Y-%m-%d %H:%M UTC")
+          {
+            echo "## Run ${{ github.run_number }} — $RUN_DATE"
+            echo ""
+            cat notes/release-notes-recommended-stable/release_notes.md || true
+            echo ""
+            cat notes/release-notes-latest-dev/release_notes.md || true
+            echo ""
+            cat notes/release-notes-xnav-stable/release_notes.md || true
+            echo ""
+            cat notes/release-notes-xnav-dev/release_notes.md || true
+          } > new_section.md
+
+          OLD_BODY=$(curl -s -H "Authorization: token $GITHUB_TOKEN" "https://api.github.com/repos/${{ github.repository }}/releases/tags/auto-builds" | jq -r '.body // empty')
+          {
+            cat new_section.md
+            echo ""
+            if [ -n "$OLD_BODY" ]; then printf '%s\n' "$OLD_BODY"; fi
+          } > combined.md
+
+          awk -v max=10 '/^## Run / { n++ } n <= max { print }' combined.md > final_body.md
+
+      - name: Update release body
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: auto-builds
+          name: "Twitter Piko AutoBuilds"
+          body_path: final_body.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
