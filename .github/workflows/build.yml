@@ -10,24 +10,9 @@ env:
   JAVA_TOOL_OPTIONS: "-Xmx6g"
 
 jobs:
-  init-release:
-    name: Ensure Release Exists
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - name: Create release if missing (never touches existing assets)
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: auto-builds
-          name: "Twitter Piko AutoBuilds"
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
   build:
     name: Build ${{ matrix.variant }}
     runs-on: ubuntu-latest
-    needs: init-release
     permissions:
       contents: write
     strategy:
@@ -108,34 +93,38 @@ jobs:
                       removed += 1
               print("Removed " + str(removed) + " requested permissions (only the 5 allowed remain)")
 
-              if mode == "clone":
-                  renamed = 0
-                  for perm in list(root.findall("permission")):
-                      perm_name = perm.get(ANDROID + "name")
-                      if perm_name and perm_name.startswith(OLD_PACKAGE):
+              renamed = 0
+              for perm in list(root.findall("permission")):
+                  perm_name = perm.get(ANDROID + "name")
+                  if perm_name and perm_name.startswith(OLD_PACKAGE):
+                      if mode == "clone":
                           perm.set(ANDROID + "name", perm_name.replace(OLD_PACKAGE, NEW_PACKAGE_NAME, 1))
-                          renamed += 1
-                  for element in root.iter():
-                      ref = element.get(ANDROID + "permission")
-                      if ref and ref.startswith(OLD_PACKAGE):
+                      else:
+                          perm.set(ANDROID + "name", "disabled_" + perm_name)
+                      renamed += 1
+              for element in root.iter():
+                  ref = element.get(ANDROID + "permission")
+                  if ref and ref.startswith(OLD_PACKAGE):
+                      if mode == "clone":
                           element.set(ANDROID + "permission", ref.replace(OLD_PACKAGE, NEW_PACKAGE_NAME, 1))
-                          renamed += 1
-                  print("Renamed " + str(renamed) + " declared permission entries")
+                      else:
+                          element.set(ANDROID + "permission", "disabled_" + ref)
+                      renamed += 1
+              print("Neutralized " + str(renamed) + " declared permission entries")
 
               bad = []
               for perm in list(root.findall("uses-permission")) + list(root.findall("uses-permission-sdk-23")):
                   name = perm.get(ANDROID + "name")
                   if name and name not in ALLOWED_PERMISSIONS:
                       bad.append(name)
-              if mode == "clone":
-                  for perm in root.findall("permission"):
-                      name = perm.get(ANDROID + "name")
-                      if name and name.startswith(OLD_PACKAGE):
-                          bad.append(name)
-                  for element in root.iter():
-                      ref = element.get(ANDROID + "permission")
-                      if ref and ref.startswith(OLD_PACKAGE):
-                          bad.append(ref)
+              for perm in root.findall("permission"):
+                  name = perm.get(ANDROID + "name")
+                  if name and name.startswith(OLD_PACKAGE):
+                      bad.append(name)
+              for element in root.iter():
+                  ref = element.get(ANDROID + "permission")
+                  if ref and ref.startswith(OLD_PACKAGE):
+                      bad.append(ref)
               if bad:
                   print("MANIFEST VERIFICATION FAILED:")
                   for b in bad:
@@ -187,6 +176,8 @@ jobs:
                       name = line.split("name='")[1].split("'")[0]
                       if name not in ALLOWED_PERMISSIONS:
                           bad_final.append(name)
+                  if line.startswith("permission:") and OLD_PACKAGE in line and "disabled_" not in line and NEW_PACKAGE_NAME not in line:
+                      bad_final.append(line)
               if bad_final:
                   print("FINAL APK VERIFICATION FAILED:")
                   for b in bad_final:
@@ -374,45 +365,16 @@ jobs:
             grep -h "WARNING: Skipping\|SEVERE: FAILED:" patch_out_normal.txt | sed 's/.*WARNING: Skipping: */- /; s/.*SEVERE: FAILED: */- /' || true
             echo ""
             echo "**Permission hardening:**"
-            grep -h "Removed \|Renamed " strip_normal_log.txt | sed 's/^/- /' || true
+            grep -h "Removed \|Neutralized " strip_normal_log.txt | sed 's/^/- /' || true
             echo ""
             echo "#### $CF"
             echo ""
             echo "All of the above, plus clone changes:"
-            grep -h "Removed \|Renamed " clone_log.txt | sed 's/^/- /' || true
+            grep -h "Removed \|Neutralized " clone_log.txt | sed 's/^/- /' || true
             echo "- Package renamed to com.twitter.androie (sharedUserId + label Z²)"
           } > release_notes.md
 
-      - name: Upload Notes Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-notes-${{ matrix.variant }}
-          path: release_notes.md
-
-      - name: Upload APKs to Accumulating Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: auto-builds
-          files: |
-            Twitter-Piko-${{ matrix.app_token }}-${{ matrix.piko_token }}-v${{ steps.apk_version_step.outputs.apk_version }}-${{ steps.patches.outputs.patch_version }}-arm64-v8a.apk
-            Twitter-Z2-Piko-${{ matrix.app_token }}-${{ matrix.piko_token }}-v${{ steps.apk_version_step.outputs.apk_version }}-${{ steps.patches.outputs.patch_version }}-arm64-v8a.apk
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  publish-notes:
-    name: Publish Cumulative Release Notes
-    runs-on: ubuntu-latest
-    needs: build
-    permissions:
-      contents: write
-    steps:
-      - name: Download notes artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: notes
-          pattern: release-notes-*
-
-      - name: Compose changelog (newest first, keep last 10 runs)
+      - name: Compose Cumulative Release Body
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -420,29 +382,24 @@ jobs:
           {
             echo "## Run ${{ github.run_number }} — $RUN_DATE"
             echo ""
-            cat notes/release-notes-recommended-stable/release_notes.md || true
-            echo ""
-            cat notes/release-notes-latest-dev/release_notes.md || true
-            echo ""
-            cat notes/release-notes-xnav-stable/release_notes.md || true
-            echo ""
-            cat notes/release-notes-xnav-dev/release_notes.md || true
+            cat release_notes.md
           } > new_section.md
-
-          OLD_BODY=$(curl -s -H "Authorization: token $GITHUB_TOKEN" "https://api.github.com/repos/${{ github.repository }}/releases/tags/auto-builds" | jq -r '.body // empty')
+          OLD_BODY=$(curl -s -H "Authorization: token $GITHUB_TOKEN" "https://api.github.com/repos/${{ github.repository }}/releases/tags/${{ matrix.variant }}-builds" | jq -r '.body // empty')
           {
             cat new_section.md
             echo ""
             if [ -n "$OLD_BODY" ]; then printf '%s\n' "$OLD_BODY"; fi
           } > combined.md
-
           awk -v max=10 '/^## Run / { n++ } n <= max { print }' combined.md > final_body.md
 
-      - name: Update release body
+      - name: Upload APKs + Release Notes
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: auto-builds
-          name: "Twitter Piko AutoBuilds"
+          tag_name: ${{ matrix.variant }}-builds
+          name: "Twitter Piko — ${{ matrix.app_token }} + ${{ matrix.piko_token }}"
           body_path: final_body.md
+          files: |
+            Twitter-Piko-${{ matrix.app_token }}-${{ matrix.piko_token }}-v${{ steps.apk_version_step.outputs.apk_version }}-${{ steps.patches.outputs.patch_version }}-arm64-v8a.apk
+            Twitter-Z2-Piko-${{ matrix.app_token }}-${{ matrix.piko_token }}-v${{ steps.apk_version_step.outputs.apk_version }}-${{ steps.patches.outputs.patch_version }}-arm64-v8a.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
