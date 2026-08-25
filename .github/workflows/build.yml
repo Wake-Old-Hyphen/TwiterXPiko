@@ -85,23 +85,17 @@ jobs:
               for perm in list(root.findall("permission")):
                   perm_name = perm.get(ANDROID + "name")
                   if perm_name and perm_name.startswith(OLD_PACKAGE):
-                      if mode == "clone":
-                          perm.set(ANDROID + "name", perm_name.replace(OLD_PACKAGE, NEW_PACKAGE_NAME, 1))
-                      else:
-                          root.remove(perm)
+                      root.remove(perm)
                       removed_custom += 1
-              print("Processed " + str(removed_custom) + " custom permission declarations")
+              print("Removed " + str(removed_custom) + " custom permission declarations")
 
               refs_removed = 0
               for element in root.iter():
                   ref = element.get(ANDROID + "permission")
                   if ref and ref.startswith(OLD_PACKAGE):
-                      if mode == "clone":
-                          element.set(ANDROID + "permission", ref.replace(OLD_PACKAGE, NEW_PACKAGE_NAME, 1))
-                      else:
-                          del element.attrib[ANDROID + "permission"]
+                      del element.attrib[ANDROID + "permission"]
                       refs_removed += 1
-              print("Processed " + str(refs_removed) + " permission references in components")
+              print("Removed " + str(refs_removed) + " permission references from components")
 
               bad = []
               for perm in list(root.findall("uses-permission")) + list(root.findall("uses-permission-sdk-23")):
