@@ -7,7 +7,7 @@ on:
 
 env:
   APP_NAME: twitter
-  JAVA_TOOL_OPTIONS: "-Xmx6g"
+  JAVA_TOOL_OPTIONS: "-Xmx8g"
 
 jobs:
   build:
@@ -269,9 +269,23 @@ jobs:
           if [ "${{ matrix.apk_version }}" = "12.2.1" ]; then
             gh release download v12.2.1-storage --pattern "*.apkm" --dir download_dir
           else
-            apkeep -a com.twitter.android -d apk-pure download_dir
+            echo "Trying APKPure (up to 3 attempts)..."
+            for i in 1 2 3; do
+              if apkeep -a com.twitter.android -d apk-pure download_dir; then break; fi
+              echo "apkeep attempt $i failed, retrying..."
+              sleep 5
+            done
+            if ! find download_dir -type f \( -name "*.apk" -o -name "*.xapk" -o -name "*.apkm" \) | grep -q .; then
+              echo "APKPure failed. Falling back to Huawei AppGallery..."
+              apkeep -a com.twitter.android -d huawei-app-gallery download_dir || true
+            fi
           fi
           DOWNLOADED_FILE=$(find download_dir -type f \( -name "*.apk" -o -name "*.xapk" -o -name "*.apkm" \) | head -n 1)
+          if [ -z "$DOWNLOADED_FILE" ]; then
+            echo "❌ No APK could be downloaded from any source."
+            ls -la download_dir
+            exit 1
+          fi
           if [[ "$DOWNLOADED_FILE" == *.xapk ]] || [[ "$DOWNLOADED_FILE" == *.apkm ]]; then
             mkdir -p xapk_extracted merge_dir
             unzip -q "$DOWNLOADED_FILE" -d xapk_extracted
@@ -288,6 +302,7 @@ jobs:
       - name: Apply x-shim PairIP Bypass (XNAV Only)
         if: matrix.apk_version == '12.2.1'
         run: |
+          set -o pipefail
           echo "Applying x-shim..."
           XSHIM_URL=$(curl -sL "https://gitlab.com/api/v4/projects/inotia00%2Fx-shim/releases" | jq -r '[.[] | .assets.links[] | select(.name | endswith(".mpp")) | .direct_asset_url // .url][0]')
           curl -sL "$XSHIM_URL" -o x-shim.mpp
@@ -296,6 +311,7 @@ jobs:
 
       - name: Patch Twitter (Normal Version)
         run: |
+          set -o pipefail
           FILENAME="Twitter-Piko-${{ matrix.app_token }}-${{ matrix.piko_token }}-v${{ steps.apk_version_step.outputs.apk_version }}-${{ steps.patches.outputs.patch_version }}-arm64-v8a.apk"
           java -jar tools/morphe-cli.jar patch -p patches.mpp -f --continue-on-error -d "Bring back twitter" -d "Dynamic color" -o "$FILENAME" base-twitter.apk | tee patch_out_normal.txt
 
@@ -307,10 +323,13 @@ jobs:
           PIKO_TOKEN: ${{ matrix.piko_token }}
           APK_VERSION: ${{ steps.apk_version_step.outputs.apk_version }}
           PATCH_VERSION: ${{ steps.patches.outputs.patch_version }}
-        run: python -u scripts/clone_and_strip.py | tee strip_normal_log.txt
+        run: |
+          set -o pipefail
+          python -u scripts/clone_and_strip.py | tee strip_normal_log.txt
 
       - name: Patch Twitter (Clone Base)
         run: |
+          set -o pipefail
           java -jar tools/morphe-cli.jar patch -p patches.mpp -f --continue-on-error -d "Bring back twitter" -d "Dynamic color" -o twitter-patched-clone.apk base-twitter.apk
 
       - name: Clone and Strip Permissions
@@ -321,7 +340,9 @@ jobs:
           PIKO_TOKEN: ${{ matrix.piko_token }}
           APK_VERSION: ${{ steps.apk_version_step.outputs.apk_version }}
           PATCH_VERSION: ${{ steps.patches.outputs.patch_version }}
-        run: python -u scripts/clone_and_strip.py | tee clone_log.txt
+        run: |
+          set -o pipefail
+          python -u scripts/clone_and_strip.py | tee clone_log.txt
 
       - name: Build Release Notes
         run: |
