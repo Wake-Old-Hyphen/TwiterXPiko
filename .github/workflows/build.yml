@@ -281,14 +281,8 @@ jobs:
             mkdir -p xapk_extracted merge_dir
             unzip -q "$DOWNLOADED_FILE" -d xapk_extracted
 
-            echo "🌐 Selecting splits: base + arm64-v8a + English + xxxhdpi..."
-            find xapk_extracted -maxdepth 2 -name "*.apk" ! -name "*split*" ! -name "*config.*" -exec cp {} merge_dir/ \;
-            find xapk_extracted -maxdepth 2 -name "*.apk" \( -name "*arm64_v8a*" -o -name "*arm64-v8a*" \) -exec cp {} merge_dir/ \;
-            find xapk_extracted -maxdepth 2 -name "*.apk" \( -name "*.en.apk" -o -name "*config.en.apk" \) -exec cp {} merge_dir/ \;
-            find xapk_extracted -maxdepth 2 -name "*xxxhdpi*.apk" -exec cp {} merge_dir/ \;
-            if ! ls merge_dir | grep -q "xxxhdpi"; then
-              find xapk_extracted -maxdepth 2 -name "*xxhdpi*.apk" -exec cp {} merge_dir/ \;
-            fi
+            echo "🌐 Merging all splits (Twitter requires full resource configs)..."
+            find xapk_extracted -maxdepth 2 -name "*.apk" -exec cp {} merge_dir/ \;
 
             echo "Selected splits:"
             ls -lh merge_dir
