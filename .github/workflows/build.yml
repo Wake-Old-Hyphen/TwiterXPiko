@@ -161,7 +161,7 @@ jobs:
                       name = line.split("name='")[1].split("'")[0]
                       if name not in ALLOWED_PERMISSIONS:
                           bad_final.append(name)
-                  if line.startswith("permission:") and OLD_PACKAGE in line and "disabled_" not in line and NEW_PACKAGE_NAME not in line:
+                  if line.startswith("permission:") and OLD_PACKAGE in line:
                       bad_final.append(line)
               if bad_final:
                   print("FINAL APK VERIFICATION FAILED:")
