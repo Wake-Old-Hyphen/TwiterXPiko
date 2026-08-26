@@ -147,7 +147,7 @@ jobs:
 
               aligned_apk = "twitter-processed-aligned.apk"
               print("Zipaligning APK...")
-              subprocess.run(["zipalign", "-f", "4", processed_apk, aligned_apk], check=True)
+              subprocess.run(["zipalign", "-f", "-p", "4", processed_apk, aligned_apk], check=True)
 
               app_token = os.environ.get("APP_TOKEN", "Unknown")
               piko_token = os.environ.get("PIKO_TOKEN", "Unknown")
