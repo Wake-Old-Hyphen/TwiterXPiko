@@ -68,7 +68,7 @@ jobs:
 
               decoded_dir = "twitter_decoded"
               print("Decoding APK in " + mode + " mode...")
-              subprocess.run(["apktool", "d", apk_file, "-o", decoded_dir, "-f"], check=True)
+              subprocess.run(["apktool", "d", apk_file, "-o", decoded_dir, "-f", "--no-src"], check=True)
 
               manifest_path = os.path.join(decoded_dir, "AndroidManifest.xml")
               tree = ET.parse(manifest_path)
