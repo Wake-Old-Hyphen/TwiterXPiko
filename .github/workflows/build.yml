@@ -80,7 +80,6 @@ jobs:
 
               if mode == "clone":
                   root.set("package", NEW_PACKAGE_NAME)
-                  root.set(ANDROID + "sharedUserId", NEW_PACKAGE_NAME + ".shared")
                   if app is not None:
                       app.set(ANDROID + "label", NEW_APP_NAME)
 
