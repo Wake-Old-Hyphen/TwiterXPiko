@@ -79,9 +79,23 @@ jobs:
                   app.set(ANDROID + "extractNativeLibs", "true")
 
               if mode == "clone":
+                  # FIRST: Convert all relative class names to absolute before changing package
+                  print("Converting relative class names to absolute...")
+                  converted = 0
+                  for element in root.iter():
+                      name_attr = element.get(ANDROID + "name")
+                      if name_attr and name_attr.startswith("."):
+                          # Convert .Foo to com.twitter.android.Foo
+                          element.set(ANDROID + "name", OLD_PACKAGE + name_attr)
+                          converted += 1
+                  print("Converted " + str(converted) + " relative class names to absolute")
+
+                  # THEN: Change package name
                   root.set("package", NEW_PACKAGE_NAME)
                   if app is not None:
                       app.set(ANDROID + "label", NEW_APP_NAME)
+
+                  # FINALLY: Rename only safe identifier attributes (not class names)
                   SAFE_ATTRS = ["authorities", "taskAffinity", "targetPackage", "sharedUserId"]
                   renamed_attrs = 0
                   for element in root.iter():
@@ -92,8 +106,9 @@ jobs:
                               if val and OLD_PACKAGE in val:
                                   element.set(key, val.replace(OLD_PACKAGE, NEW_PACKAGE_NAME))
                                   renamed_attrs += 1
-                  print("Renamed " + str(renamed_attrs) + " package-scope attributes (authorities/taskAffinity/targetPackage/sharedUserId)")
+                  print("Renamed " + str(renamed_attrs) + " package-scope attributes (authorities/taskAffinity/targetPackage)")
 
+              # Permission stripping (both modes)
               removed = 0
               for perm_type in ["uses-permission", "uses-permission-sdk-23"]:
                   for perm in list(root.findall(perm_type)):
