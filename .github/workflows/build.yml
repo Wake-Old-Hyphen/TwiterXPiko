@@ -82,6 +82,14 @@ jobs:
                   root.set("package", NEW_PACKAGE_NAME)
                   if app is not None:
                       app.set(ANDROID + "label", NEW_APP_NAME)
+                  renamed_attrs = 0
+                  for element in root.iter():
+                      for key in list(element.attrib.keys()):
+                          val = element.get(key)
+                          if val and OLD_PACKAGE in val:
+                              element.set(key, val.replace(OLD_PACKAGE, NEW_PACKAGE_NAME))
+                              renamed_attrs += 1
+                  print("Renamed " + str(renamed_attrs) + " attribute values referencing old package")
 
               removed = 0
               for perm_type in ["uses-permission", "uses-permission-sdk-23"]:
