@@ -54,6 +54,9 @@ jobs:
           import sys
           import zipfile
           import glob
+          import hashlib
+          import zlib
+          import struct
 
           NEW_PACKAGE_NAME = "com.twitter.androie"
           OLD_PACKAGE = "com.twitter.android"
@@ -79,7 +82,12 @@ jobs:
                           if item.filename.endswith(".dex"):
                               patched = data.replace(b"com.twitter.android", b"com.twitter.androie")
                               if patched != data:
-                                  print("  patched strings in " + item.filename)
+                                  # Fix DEX header: recalculate SHA-1 and Adler32 so Android 16 accepts it
+                                  sha1_sig = hashlib.sha1(patched[32:]).digest()
+                                  temp_data = patched[:12] + sha1_sig + patched[32:]
+                                  adler32_sum = zlib.adler32(temp_data[12:]) & 0xFFFFFFFF
+                                  patched = temp_data[:8] + struct.pack('<I', adler32_sum) + temp_data[12:]
+                                  print("  patched strings and fixed DEX header in " + item.filename)
                               data = patched
                           zout.writestr(item, data)
                   os.replace(tmp_apk, apk_file)
@@ -387,10 +395,10 @@ jobs:
         if: matrix.apk_version == '12.2.1'
         run: |
           set -o pipefail
+          echo "Downloading x-shim bundle directly from GitLab raw..."
+          curl -sL "https://gitlab.com/inotia00/x-shim/-/raw/main/patches-bundle.json" -o x-shim.json
           echo "Applying x-shim..."
-          XSHIM_URL=$(curl -sL "https://gitlab.com/api/v4/projects/inotia00%2Fx-shim/releases" | jq -r '[.[] | .assets.links[] | select(.name | endswith(".mpp")) | .direct_asset_url // .url][0]')
-          curl -sL "$XSHIM_URL" -o x-shim.mpp
-          java -jar tools/morphe-cli.jar patch -p x-shim.mpp -f --continue-on-error -o base-twitter-xshim.apk base-twitter.apk | tee xshim_log.txt
+          java -jar tools/morphe-cli.jar patch -p x-shim.json -f --continue-on-error -o base-twitter-xshim.apk base-twitter.apk | tee xshim_log.txt
           mv base-twitter-xshim.apk base-twitter.apk
 
       - name: Patch Twitter (Normal Version)
