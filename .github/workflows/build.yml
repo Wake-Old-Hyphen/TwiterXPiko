@@ -281,21 +281,6 @@ jobs:
           JAR_URL=$(echo "$RELEASE_INFO" | grep -o '"browser_download_url": "[^"]*-all.jar"' | head -n 1 | cut -d'"' -f4)
           curl -sL "$JAR_URL" -o tools/morphe-cli.jar
 
-      - name: Download Piko Patches (.mpp)
-        id: patches
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          if [ "${{ matrix.patch_channel }}" = "prerelease" ]; then
-            RELEASE_INFO=$(curl -sL -H "Authorization: token $GITHUB_TOKEN" "https://api.github.com/repos/crimera/piko/releases" | jq -r '.[0]')
-          else
-            RELEASE_INFO=$(curl -sL -H "Authorization: token $GITHUB_TOKEN" "https://api.github.com/repos/crimera/piko/releases/latest")
-          fi
-          PATCH_URL=$(echo "$RELEASE_INFO" | jq -r '.assets[] | select(.name | endswith(".mpp")) | .browser_download_url')
-          PATCH_TAG=$(echo "$RELEASE_INFO" | jq -r '.tag_name')
-          echo "patch_version=$PATCH_TAG" >> $GITHUB_OUTPUT
-          curl -sL "$PATCH_URL" -o patches.mpp
-
       - name: Download APKEditor
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -358,6 +343,46 @@ jobs:
           VERSION=$(aapt dump badging base-twitter.apk | grep "versionName" | head -n 1 | sed -E "s/.*versionName='([^']+)'.*/\1/")
           echo "apk_version=$VERSION" >> $GITHUB_OUTPUT
 
+      - name: Download Piko Patches (Dynamic Routing)
+        id: patches
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          APPV="${{ steps.apk_version_step.outputs.apk_version }}"
+          THRESHOLD="12.19.1-release.0"
+          HIGHEST=$(printf "%s\n%s" "$APPV" "$THRESHOLD" | sort -V | tail -n 1)
+
+          if [ "$HIGHEST" != "$THRESHOLD" ]; then
+            echo "App version $APPV is newer than $THRESHOLD. Using crimera/piko-newx"
+            PATCH_REPO="crimera/piko-newx"
+          else
+            echo "App version $APPV is $THRESHOLD or older. Using crimera/piko"
+            PATCH_REPO="crimera/piko"
+          fi
+
+          if [ "${{ matrix.patch_channel }}" = "prerelease" ]; then
+            RELEASE_INFO=$(curl -sL -H "Authorization: token $GITHUB_TOKEN" "https://api.github.com/repos/${PATCH_REPO}/releases" | jq -r '.[0]')
+          else
+            RELEASE_INFO=$(curl -sL -H "Authorization: token $GITHUB_TOKEN" "https://api.github.com/repos/${PATCH_REPO}/releases/latest")
+          fi
+
+          PATCH_URL=$(echo "$RELEASE_INFO" | jq -r '.assets[] | select(.name | endswith(".mpp")) | .browser_download_url' | head -n 1)
+          if [ -z "$PATCH_URL" ] || [ "$PATCH_URL" = "null" ]; then
+            PATCH_URL=$(echo "$RELEASE_INFO" | jq -r '.assets[] | select(.name | endswith(".json")) | .browser_download_url' | head -n 1)
+          fi
+
+          PATCH_TAG=$(echo "$RELEASE_INFO" | jq -r '.tag_name')
+
+          if [ -z "$PATCH_URL" ] || [ "$PATCH_URL" = "null" ]; then
+            echo "❌ Failed to find patch bundle in $PATCH_REPO releases!"
+            exit 1
+          fi
+
+          echo "Downloading patch bundle from $PATCH_URL"
+          echo "patch_version=$PATCH_TAG" >> $GITHUB_OUTPUT
+          echo "patch_repo=$PATCH_REPO" >> $GITHUB_OUTPUT
+          curl -sL "$PATCH_URL" -o patches.mpp
+
       - name: Apply x-shim PairIP Bypass (XNAV Only)
         if: matrix.apk_version == '12.2.1'
         run: |
@@ -407,12 +432,13 @@ jobs:
         run: |
           APPV="${{ steps.apk_version_step.outputs.apk_version }}"
           PATV="${{ steps.patches.outputs.patch_version }}"
+          PREPO="${{ steps.patches.outputs.patch_repo }}"
           NF="Twitter-Piko-${{ matrix.app_token }}-${{ matrix.piko_token }}-v$APPV-$PATV-arm64-v8a.apk"
           CF="Twitter-Z2-Piko-${{ matrix.app_token }}-${{ matrix.piko_token }}-v$APPV-$PATV-arm64-v8a.apk"
           {
             echo "### ${{ matrix.app_token }} app + ${{ matrix.piko_token }}"
             echo ""
-            echo "- **App version:** v$APPV | **Piko bundle:** $PATV | **Arch:** arm64-v8a | **Density:** xhdpi/nodpi"
+            echo "- **App version:** v$APPV | **Piko bundle:** $PATV (from \`$PREPO\`) | **Arch:** arm64-v8a | **Density:** xhdpi/nodpi"
             echo ""
             if [ -f xshim_log.txt ]; then
               echo "🛡️ **x-shim PairIP bypass applied first (v12.2.1 only):**"
