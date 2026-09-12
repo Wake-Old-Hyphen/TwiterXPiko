@@ -52,6 +52,8 @@ jobs:
           import os
           import subprocess
           import sys
+          import zipfile
+          import glob
 
           NEW_PACKAGE_NAME = "com.twitter.androie"
           OLD_PACKAGE = "com.twitter.android"
@@ -66,9 +68,51 @@ jobs:
                   print("Patched APK not found")
                   sys.exit(1)
 
+              if mode == "clone":
+                  print("Rewriting package strings inside DEX (URV Style)...")
+                  tmp_apk = apk_file + ".dexpatched"
+                  with zipfile.ZipFile(apk_file, "r") as zin, zipfile.ZipFile(tmp_apk, "w", zipfile.ZIP_DEFLATED) as zout:
+                      for item in zin.infolist():
+                          if item.filename.startswith("META-INF"):
+                              continue
+                          data = zin.read(item.filename)
+                          if item.filename.endswith(".dex"):
+                              patched = data.replace(b"com.twitter.android", b"com.twitter.androie")
+                              if patched != data:
+                                  print("  patched strings in " + item.filename)
+                              data = patched
+                          zout.writestr(item, data)
+                  os.replace(tmp_apk, apk_file)
+                  print("DEX string rewrite complete")
+
               decoded_dir = "twitter_decoded"
               print("Decoding APK in " + mode + " mode...")
               subprocess.run(["apktool", "d", apk_file, "-o", decoded_dir, "-f", "--no-src"], check=True)
+
+              if mode == "clone":
+                  print("Rewriting package-scope attributes in decoded resources...")
+                  ET.register_namespace("android", "http://schemas.android.com/apk/res/android")
+                  RES_ATTRS = ["authorities", "authority", "contentAuthority", "accountType", "targetPackage"]
+                  res_count = 0
+                  for xml_file in glob.glob(os.path.join(decoded_dir, "res", "**", "*.xml"), recursive=True):
+                      try:
+                          res_tree = ET.parse(xml_file)
+                      except ET.ParseError:
+                          continue
+                      res_root = res_tree.getroot()
+                      changed = False
+                      for el in res_root.iter():
+                          for key in list(el.attrib.keys()):
+                              local = key.split("}")[-1] if "}" in key else key
+                              if local in RES_ATTRS:
+                                  val = el.get(key)
+                                  if val and OLD_PACKAGE in val:
+                                      el.set(key, val.replace(OLD_PACKAGE, NEW_PACKAGE_NAME))
+                                      changed = True
+                                      res_count += 1
+                      if changed:
+                          res_tree.write(xml_file, encoding="utf-8", xml_declaration=True)
+                  print("Rewrote " + str(res_count) + " resource attribute values (accountType/authority/targetPackage)")
 
               manifest_path = os.path.join(decoded_dir, "AndroidManifest.xml")
               tree = ET.parse(manifest_path)
@@ -79,24 +123,20 @@ jobs:
                   app.set(ANDROID + "extractNativeLibs", "true")
 
               if mode == "clone":
-                  # FIRST: Convert all relative class names to absolute before changing package
                   print("Converting relative class names to absolute...")
                   converted = 0
                   for element in root.iter():
                       name_attr = element.get(ANDROID + "name")
                       if name_attr and name_attr.startswith("."):
-                          # Convert .Foo to com.twitter.android.Foo
                           element.set(ANDROID + "name", OLD_PACKAGE + name_attr)
                           converted += 1
                   print("Converted " + str(converted) + " relative class names to absolute")
 
-                  # THEN: Change package name
                   root.set("package", NEW_PACKAGE_NAME)
                   if app is not None:
                       app.set(ANDROID + "label", NEW_APP_NAME)
 
-                  # FINALLY: Rename only safe identifier attributes (not class names)
-                  SAFE_ATTRS = ["authorities", "taskAffinity", "targetPackage", "sharedUserId"]
+                  SAFE_ATTRS = ["authorities", "taskAffinity", "targetPackage"]
                   renamed_attrs = 0
                   for element in root.iter():
                       for key in list(element.attrib.keys()):
@@ -106,9 +146,8 @@ jobs:
                               if val and OLD_PACKAGE in val:
                                   element.set(key, val.replace(OLD_PACKAGE, NEW_PACKAGE_NAME))
                                   renamed_attrs += 1
-                  print("Renamed " + str(renamed_attrs) + " package-scope attributes (authorities/taskAffinity/targetPackage)")
+                  print("Renamed " + str(renamed_attrs) + " package-scope attributes (no sharedUserId)")
 
-              # Permission stripping (both modes)
               removed = 0
               for perm_type in ["uses-permission", "uses-permission-sdk-23"]:
                   for perm in list(root.findall(perm_type)):
@@ -119,37 +158,13 @@ jobs:
                           continue
                       root.remove(perm)
                       removed += 1
-              print("Removed " + str(removed) + " requested permissions")
-
-              removed_custom = 0
-              for perm in list(root.findall("permission")):
-                  perm_name = perm.get(ANDROID + "name")
-                  if perm_name and perm_name.startswith(OLD_PACKAGE):
-                      root.remove(perm)
-                      removed_custom += 1
-              print("Removed " + str(removed_custom) + " custom permission declarations")
-
-              refs_removed = 0
-              for element in root.iter():
-                  ref = element.get(ANDROID + "permission")
-                  if ref and ref.startswith(OLD_PACKAGE):
-                      del element.attrib[ANDROID + "permission"]
-                      refs_removed += 1
-              print("Removed " + str(refs_removed) + " permission references from components")
+              print("Removed " + str(removed) + " requested permissions (APKTool M style)")
 
               bad = []
               for perm in list(root.findall("uses-permission")) + list(root.findall("uses-permission-sdk-23")):
                   name = perm.get(ANDROID + "name")
                   if name and name not in ALLOWED_PERMISSIONS:
                       bad.append(name)
-              for perm in root.findall("permission"):
-                  name = perm.get(ANDROID + "name")
-                  if name and name.startswith(OLD_PACKAGE):
-                      bad.append(name)
-              for element in root.iter():
-                  ref = element.get(ANDROID + "permission")
-                  if ref and ref.startswith(OLD_PACKAGE):
-                      bad.append(ref)
               if bad:
                   print("MANIFEST VERIFICATION FAILED:")
                   for b in bad:
@@ -169,13 +184,23 @@ jobs:
                               string.text = NEW_APP_NAME
                       str_tree.write(strings_path, encoding="utf-8", xml_declaration=True)
 
-              processed_apk = "twitter-processed-unsigned.apk"
+              processed_apk = "twitter-processed.apk"
               print("Rebuilding APK...")
               subprocess.run(["apktool", "b", decoded_dir, "-o", processed_apk, "--use-aapt2"], check=True)
 
-              aligned_apk = "twitter-processed-aligned.apk"
+              ultra_apk = "twitter-ultra.apk"
+              print("Applying UltraZip compression (Level 9, resources.arsc stored)...")
+              with zipfile.ZipFile(processed_apk, 'r') as zin, zipfile.ZipFile(ultra_apk, 'w', zipfile.ZIP_DEFLATED, compresslevel=9) as zout:
+                  for item in zin.infolist():
+                      data = zin.read(item.filename)
+                      if item.filename == "resources.arsc":
+                          zout.writestr(item, data, compress_type=zipfile.ZIP_STORED)
+                      else:
+                          zout.writestr(item, data, compress_type=zipfile.ZIP_DEFLATED, compresslevel=9)
+
+              aligned_apk = "twitter-aligned.apk"
               print("Zipaligning APK (page-aligned natives)...")
-              subprocess.run(["zipalign", "-f", "-p", "4", processed_apk, aligned_apk], check=True)
+              subprocess.run(["zipalign", "-f", "-p", "4", ultra_apk, aligned_apk], check=True)
 
               app_token = os.environ.get("APP_TOKEN", "Unknown")
               piko_token = os.environ.get("PIKO_TOKEN", "Unknown")
@@ -199,8 +224,6 @@ jobs:
                       name = line.split("name='")[1].split("'")[0]
                       if name not in ALLOWED_PERMISSIONS:
                           bad_final.append(name)
-                  if line.startswith("permission:") and OLD_PACKAGE in line:
-                      bad_final.append(line)
               if bad_final:
                   print("FINAL APK VERIFICATION FAILED:")
                   for b in bad_final:
@@ -210,7 +233,7 @@ jobs:
               print(result.stdout)
 
               print("SUCCESS: " + final_apk)
-              subprocess.run(["rm", "-rf", decoded_dir, processed_apk, aligned_apk])
+              subprocess.run(["rm", "-rf", decoded_dir, processed_apk, ultra_apk, aligned_apk])
 
           if __name__ == "__main__":
               main()
@@ -318,11 +341,11 @@ jobs:
             mkdir -p xapk_extracted merge_dir
             unzip -q "$DOWNLOADED_FILE" -d xapk_extracted
 
-            echo "Merging minimal splits: base + arm64 + en + xhdpi/xxhdpi/xxxhdpi + nodpi/anydpi..."
+            echo "Merging minimal splits (URV Style): base + arm64 + en + xhdpi + nodpi/anydpi..."
             find xapk_extracted -maxdepth 2 -name "*.apk" ! -name "*config.*" ! -name "*split*" -exec cp {} merge_dir/ \;
             find xapk_extracted -maxdepth 2 -name "*.apk" \( -name "*arm64_v8a*" -o -name "*arm64-v8a*" \) -exec cp {} merge_dir/ \;
             find xapk_extracted -maxdepth 2 -name "*.apk" \( -name "*.en.apk" -o -name "*config.en.apk" \) -exec cp {} merge_dir/ \;
-            find xapk_extracted -maxdepth 2 -name "*.apk" \( -name "*xhdpi*" -o -name "*xxhdpi*" -o -name "*xxxhdpi*" -o -name "*nodpi*" -o -name "*anydpi*" \) -exec cp {} merge_dir/ \;
+            find xapk_extracted -maxdepth 2 -name "*.apk" \( -name "*.xhdpi.apk" -o -name "*.nodpi.apk" -o -name "*.anydpi.apk" \) -exec cp {} merge_dir/ \;
 
             echo "Selected splits:"
             ls -lh merge_dir
@@ -351,7 +374,7 @@ jobs:
           FILENAME="Twitter-Piko-${{ matrix.app_token }}-${{ matrix.piko_token }}-v${{ steps.apk_version_step.outputs.apk_version }}-${{ steps.patches.outputs.patch_version }}-arm64-v8a.apk"
           java -jar tools/morphe-cli.jar patch -p patches.mpp -f --continue-on-error -d "Bring back twitter" -d "Dynamic color" -o "$FILENAME" base-twitter.apk | tee patch_out_normal.txt
 
-      - name: Strip Permissions (Normal Version)
+      - name: Strip Permissions & UltraZip (Normal Version)
         env:
           PATCHED_APK_PATH: Twitter-Piko-${{ matrix.app_token }}-${{ matrix.piko_token }}-v${{ steps.apk_version_step.outputs.apk_version }}-${{ steps.patches.outputs.patch_version }}-arm64-v8a.apk
           MODE: strip
@@ -368,7 +391,7 @@ jobs:
           set -o pipefail
           java -jar tools/morphe-cli.jar patch -p patches.mpp -f --continue-on-error -d "Bring back twitter" -d "Dynamic color" -o twitter-patched-clone.apk base-twitter.apk
 
-      - name: Clone and Strip Permissions
+      - name: Clone, Strip & UltraZip (Clone Version)
         env:
           PATCHED_APK_PATH: twitter-patched-clone.apk
           MODE: clone
@@ -389,7 +412,7 @@ jobs:
           {
             echo "### ${{ matrix.app_token }} app + ${{ matrix.piko_token }}"
             echo ""
-            echo "- **App version:** v$APPV | **Piko bundle:** $PATV | **Arch:** arm64-v8a"
+            echo "- **App version:** v$APPV | **Piko bundle:** $PATV | **Arch:** arm64-v8a | **Density:** xhdpi/nodpi"
             echo ""
             if [ -f xshim_log.txt ]; then
               echo "🛡️ **x-shim PairIP bypass applied first (v12.2.1 only):**"
@@ -399,6 +422,7 @@ jobs:
             echo "#### $NF"
             echo ""
             echo "- **SHA256:** $(sha256sum "$NF" | cut -d' ' -f1)"
+            echo "- **Size:** $(du -h "$NF" | cut -f1)"
             echo ""
             echo "<details><summary>Verified permissions of this exact file (aapt dump)</summary>"
             echo ""
@@ -416,6 +440,7 @@ jobs:
             echo "#### $CF"
             echo ""
             echo "- **SHA256:** $(sha256sum "$CF" | cut -d' ' -f1)"
+            echo "- **Size:** $(du -h "$CF" | cut -f1)"
             echo ""
             echo "<details><summary>Verified permissions of this exact file (aapt dump)</summary>"
             echo ""
@@ -424,9 +449,9 @@ jobs:
             echo '```'
             echo "</details>"
             echo ""
-            echo "All of the above, plus clone changes:"
-            grep -h "Removed " clone_log.txt | sed 's/^/- /' || true
-            echo "- Package renamed to com.twitter.androie (sharedUserId + label Z²)"
+            echo "All of the above, plus URV clone modifications:"
+            grep -h "Rewrote \|Converted \|Renamed " clone_log.txt | sed 's/^/- /' || true
+            echo "- Package renamed to com.twitter.androie (label Z², no sharedUserId)"
           } > release_notes.md
 
       - name: Compose Cumulative Release Body
