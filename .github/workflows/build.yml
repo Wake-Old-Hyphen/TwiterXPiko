@@ -421,42 +421,65 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           if [ "${{ matrix.patch_source }}" = "newx" ]; then
-            URL="https://raw.githubusercontent.com/crimera/piko-newx/main/patches-bundle.json"
-            BRANCH="main"
-            REPO="crimera/piko-newx"
+            MANIFEST_URL="https://raw.githubusercontent.com/crimera/piko-newx/main/patches-bundle.json"
           elif [ "${{ matrix.patch_source }}" = "piko-dev" ]; then
-            URL="https://raw.githubusercontent.com/crimera/piko/dev/patches-bundle.json"
-            BRANCH="dev"
-            REPO="crimera/piko"
+            MANIFEST_URL="https://raw.githubusercontent.com/crimera/piko/dev/patches-bundle.json"
           else
-            URL="https://raw.githubusercontent.com/crimera/piko/main/patches-bundle.json"
-            BRANCH="main"
-            REPO="crimera/piko"
+            MANIFEST_URL="https://raw.githubusercontent.com/crimera/piko/main/patches-bundle.json"
           fi
 
-          echo "Downloading patch bundle from $URL"
-          curl -fsSL "$URL" -o patches.json || {
-            echo "❌ Failed to download patch bundle"
+          echo "Fetching bundle manifest from $MANIFEST_URL"
+          curl -fsSL "$MANIFEST_URL" -o bundle.json || {
+            echo "❌ Failed to download bundle manifest"
             exit 1
           }
 
-          PATCH_TAG=$(curl -sL -H "Authorization: token $GITHUB_TOKEN" "https://api.github.com/repos/${REPO}/commits/${BRANCH}" | jq -r '.sha[0:7]')
+          # Recursively search the JSON for any string ending in .mpp (the download URL)
+          MPP_URL=$(jq -r '.. | strings | select(endswith(".mpp"))' bundle.json | head -n 1)
+          if [ -z "$MPP_URL" ] || [ "$MPP_URL" = "null" ]; then
+            echo "❌ Could not find .mpp download URL in bundle.json"
+            cat bundle.json
+            exit 1
+          fi
+
+          echo "Downloading compiled .mpp from $MPP_URL"
+          curl -fsSL "$MPP_URL" -o patches.mpp || {
+            echo "❌ Failed to download .mpp file"
+            exit 1
+          }
+
+          PATCH_TAG=$(jq -r '.[0].version // .version // empty' bundle.json | head -n 1)
+          if [ -z "$PATCH_TAG" ]; then
+            PATCH_TAG=$(echo "$MPP_URL" | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+[^/]*' | head -n 1 | sed 's/^v//')
+            if [ -z "$PATCH_TAG" ]; then PATCH_TAG="unknown"; fi
+          fi
+
           echo "patch_version=$PATCH_TAG" >> $GITHUB_OUTPUT
 
       - name: Apply x-shim PairIP Bypass (XNAV Only)
         if: matrix.xshim == 'true'
         run: |
           set -o pipefail
-          echo "Downloading x-shim bundle directly from GitLab raw..."
-          curl -sL "https://gitlab.com/inotia00/x-shim/-/raw/main/patches-bundle.json" -o x-shim.json
+          echo "Fetching x-shim bundle manifest from GitLab..."
+          curl -fsSL "https://gitlab.com/inotia00/x-shim/-/raw/main/patches-bundle.json?ref_type=heads" -o x-shim-bundle.json
+          
+          MPP_URL=$(jq -r '.. | strings | select(endswith(".mpp"))' x-shim-bundle.json | head -n 1)
+          if [ -z "$MPP_URL" ] || [ "$MPP_URL" = "null" ]; then
+            echo "❌ Could not find x-shim .mpp URL in GitLab manifest"
+            exit 1
+          fi
+          
+          echo "Downloading x-shim .mpp from $MPP_URL"
+          curl -fsSL "$MPP_URL" -o x-shim.mpp
+          
           echo "Applying x-shim..."
-          java -jar tools/morphe-cli.jar patch -p x-shim.json -f --continue-on-error -o base-twitter-xshim.apk base-twitter.apk | tee xshim_log.txt
+          java -jar tools/morphe-cli.jar patch -p x-shim.mpp -f --continue-on-error -o base-twitter-xshim.apk base-twitter.apk | tee xshim_log.txt
           mv base-twitter-xshim.apk base-twitter.apk
 
       - name: Patch Twitter Base (ONCE)
         run: |
           set -o pipefail
-          java -jar tools/morphe-cli.jar patch -p patches.json -f --continue-on-error -d "Bring back twitter" -d "Dynamic color" -o patched-base.apk base-twitter.apk | tee patch_out.txt
+          java -jar tools/morphe-cli.jar patch -p patches.mpp -f --continue-on-error -d "Bring back twitter" -d "Dynamic color" -o patched-base.apk base-twitter.apk | tee patch_out.txt
 
       - name: Normal — Strip, UltraZip, Sign
         env:
