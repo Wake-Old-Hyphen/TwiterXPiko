@@ -19,26 +19,56 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - variant: recommended-stable
-            app_token: Recommended
-            piko_token: StablePiko
-            apk_version: recommended
-            patch_channel: stable
-          - variant: latest-dev
-            app_token: Latest
-            piko_token: DevPiko
-            apk_version: latest
-            patch_channel: prerelease
           - variant: xnav-stable
             app_token: XNAV
             piko_token: StablePiko
-            apk_version: "12.2.1"
+            apk_source: storage
+            storage_tag: v12.2.1-storage
+            expect_prefix: "12.2.1"
+            xshim: "true"
+            patch_source: piko
             patch_channel: stable
+            patch_file: patches.mpp
           - variant: xnav-dev
             app_token: XNAV
             piko_token: DevPiko
-            apk_version: "12.2.1"
+            apk_source: storage
+            storage_tag: v12.2.1-storage
+            expect_prefix: "12.2.1"
+            xshim: "true"
+            patch_source: piko
             patch_channel: prerelease
+            patch_file: patches.mpp
+          - variant: classic-stable
+            app_token: Classic
+            piko_token: StablePiko
+            apk_source: storage
+            storage_tag: v12.19.1-storage
+            expect_prefix: "12.19.1"
+            xshim: "false"
+            patch_source: piko
+            patch_channel: stable
+            patch_file: patches.mpp
+          - variant: classic-dev
+            app_token: Classic
+            piko_token: DevPiko
+            apk_source: storage
+            storage_tag: v12.19.1-storage
+            expect_prefix: "12.19.1"
+            xshim: "false"
+            patch_source: piko
+            patch_channel: prerelease
+            patch_file: patches.mpp
+          - variant: newx
+            app_token: NewX
+            piko_token: NewX
+            apk_source: apkeep
+            storage_tag: ""
+            expect_prefix: ""
+            xshim: "false"
+            patch_source: newx
+            patch_channel: ""
+            patch_file: patches.json
 
     steps:
       - name: Checkout Repository
@@ -66,14 +96,16 @@ jobs:
 
           def main():
               mode = os.environ.get("MODE", "clone")
-              apk_file = os.environ.get("PATCHED_APK_PATH", "twitter-patched.apk")
+              apk_file = os.environ.get("PATCHED_APK_PATH", "patched-base.apk")
               if not os.path.exists(apk_file):
                   print("Patched APK not found")
                   sys.exit(1)
 
+              decode_target = apk_file
+              tmp_apk = apk_file + ".dexpatched"
+
               if mode == "clone":
                   print("Rewriting package strings inside DEX (URV Style)...")
-                  tmp_apk = apk_file + ".dexpatched"
                   with zipfile.ZipFile(apk_file, "r") as zin, zipfile.ZipFile(tmp_apk, "w", zipfile.ZIP_DEFLATED) as zout:
                       for item in zin.infolist():
                           if item.filename.startswith("META-INF"):
@@ -82,7 +114,6 @@ jobs:
                           if item.filename.endswith(".dex"):
                               patched = data.replace(b"com.twitter.android", b"com.twitter.androie")
                               if patched != data:
-                                  # Fix DEX header: recalculate SHA-1 and Adler32 so Android 16 accepts it
                                   sha1_sig = hashlib.sha1(patched[32:]).digest()
                                   temp_data = patched[:12] + sha1_sig + patched[32:]
                                   adler32_sum = zlib.adler32(temp_data[12:]) & 0xFFFFFFFF
@@ -90,12 +121,12 @@ jobs:
                                   print("  patched strings and fixed DEX header in " + item.filename)
                               data = patched
                           zout.writestr(item, data)
-                  os.replace(tmp_apk, apk_file)
+                  decode_target = tmp_apk
                   print("DEX string rewrite complete")
 
               decoded_dir = "twitter_decoded"
               print("Decoding APK in " + mode + " mode...")
-              subprocess.run(["apktool", "d", apk_file, "-o", decoded_dir, "-f", "--no-src"], check=True)
+              subprocess.run(["apktool", "d", decode_target, "-o", decoded_dir, "-f", "--no-src"], check=True)
 
               if mode == "clone":
                   print("Rewriting package-scope attributes in decoded resources...")
@@ -241,7 +272,10 @@ jobs:
               print(result.stdout)
 
               print("SUCCESS: " + final_apk)
-              subprocess.run(["rm", "-rf", decoded_dir, processed_apk, ultra_apk, aligned_apk])
+              cleanup = [decoded_dir, processed_apk, ultra_apk, aligned_apk]
+              if mode == "clone":
+                  cleanup.append(tmp_apk)
+              subprocess.run(["rm", "-rf"] + cleanup)
 
           if __name__ == "__main__":
               main()
@@ -310,8 +344,12 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           mkdir -p download_dir
-          if [ "${{ matrix.apk_version }}" = "12.2.1" ]; then
-            gh release download v12.2.1-storage --pattern "*.apkm" --dir download_dir
+          if [ "${{ matrix.apk_source }}" = "storage" ]; then
+            gh release download "${{ matrix.storage_tag }}" --pattern "*.apkm" --pattern "*.xapk" --pattern "*.apk" --dir download_dir || {
+              echo "❌ Storage release '${{ matrix.storage_tag }}' missing or empty."
+              echo "   Create a release with tag '${{ matrix.storage_tag }}' and upload the Twitter bundle (.apkm/.xapk/.apk) for this version."
+              exit 1
+            }
           else
             echo "Trying APKPure (up to 3 attempts)..."
             for i in 1 2 3; do
@@ -349,50 +387,67 @@ jobs:
             mv "$DOWNLOADED_FILE" base-twitter.apk
           fi
           VERSION=$(aapt dump badging base-twitter.apk | grep "versionName" | head -n 1 | sed -E "s/.*versionName='([^']+)'.*/\1/")
+          echo "Base APK version: $VERSION"
+
+          THRESH="12.19.1-release.0"
+          HIGHEST=$(printf "%s\n%s" "$VERSION" "$THRESH" | sort -V | tail -n 1)
+          if [ "${{ matrix.patch_source }}" = "piko" ]; then
+            if [ "$HIGHEST" != "$THRESH" ] && [ "$VERSION" != "$THRESH" ]; then
+              echo "❌ Old piko bundle only supports up to 12.19.1, but base APK is $VERSION"
+              exit 1
+            fi
+          else
+            if [ "$HIGHEST" = "$THRESH" ] || [ "$VERSION" = "$THRESH" ]; then
+              echo "❌ NewX bundle requires an app newer than 12.19.1, but base APK is $VERSION"
+              exit 1
+            fi
+          fi
+          if [ -n "${{ matrix.expect_prefix }}" ]; then
+            case "$VERSION" in
+              "${{ matrix.expect_prefix }}"*) ;;
+              *)
+                echo "❌ Version guard failed: expected prefix '${{ matrix.expect_prefix }}' but base APK reports $VERSION"
+                echo "   Check the contents of storage release '${{ matrix.storage_tag }}'."
+                exit 1
+                ;;
+            esac
+          fi
+          echo "✅ Base APK version verified: $VERSION"
           echo "apk_version=$VERSION" >> $GITHUB_OUTPUT
 
-      - name: Download Piko Patches (Dynamic Routing)
+      - name: Download Patch Bundle
         id: patches
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          APPV="${{ steps.apk_version_step.outputs.apk_version }}"
-          THRESHOLD="12.19.1-release.0"
-          HIGHEST=$(printf "%s\n%s" "$APPV" "$THRESHOLD" | sort -V | tail -n 1)
-
-          if [ "$HIGHEST" != "$THRESHOLD" ]; then
-            echo "App version $APPV is newer than $THRESHOLD. Using crimera/piko-newx"
-            PATCH_REPO="crimera/piko-newx"
+          if [ "${{ matrix.patch_source }}" = "newx" ]; then
+            echo "Using crimera/piko-newx (raw main bundle)"
+            curl -fsSL "https://raw.githubusercontent.com/crimera/piko-newx/main/patches-bundle.json" -o patches.json || {
+              echo "❌ Failed to download piko-newx bundle"
+              exit 1
+            }
+            PATCH_TAG=$(curl -sL -H "Authorization: token $GITHUB_TOKEN" "https://api.github.com/repos/crimera/piko-newx/commits/main" | jq -r '.sha[0:7]')
           else
-            echo "App version $APPV is $THRESHOLD or older. Using crimera/piko"
-            PATCH_REPO="crimera/piko"
+            if [ "${{ matrix.patch_channel }}" = "prerelease" ]; then
+              RELEASE_INFO=$(curl -sL -H "Authorization: token $GITHUB_TOKEN" "https://api.github.com/repos/crimera/piko/releases" | jq -r '.[0]')
+            else
+              RELEASE_INFO=$(curl -sL -H "Authorization: token $GITHUB_TOKEN" "https://api.github.com/repos/crimera/piko/releases/latest")
+            fi
+            PATCH_URL=$(echo "$RELEASE_INFO" | jq -r '.assets[] | select(.name | endswith(".mpp")) | .browser_download_url' | head -n 1)
+            if [ -z "$PATCH_URL" ] || [ "$PATCH_URL" = "null" ]; then
+              PATCH_URL=$(echo "$RELEASE_INFO" | jq -r '.assets[] | select(.name | endswith(".json")) | .browser_download_url' | head -n 1)
+            fi
+            PATCH_TAG=$(echo "$RELEASE_INFO" | jq -r '.tag_name')
+            if [ -z "$PATCH_URL" ] || [ "$PATCH_URL" = "null" ]; then
+              echo "❌ Failed to find patch bundle in crimera/piko releases!"
+              exit 1
+            fi
+            curl -sL "$PATCH_URL" -o patches.mpp
           fi
-
-          if [ "${{ matrix.patch_channel }}" = "prerelease" ]; then
-            RELEASE_INFO=$(curl -sL -H "Authorization: token $GITHUB_TOKEN" "https://api.github.com/repos/${PATCH_REPO}/releases" | jq -r '.[0]')
-          else
-            RELEASE_INFO=$(curl -sL -H "Authorization: token $GITHUB_TOKEN" "https://api.github.com/repos/${PATCH_REPO}/releases/latest")
-          fi
-
-          PATCH_URL=$(echo "$RELEASE_INFO" | jq -r '.assets[] | select(.name | endswith(".mpp")) | .browser_download_url' | head -n 1)
-          if [ -z "$PATCH_URL" ] || [ "$PATCH_URL" = "null" ]; then
-            PATCH_URL=$(echo "$RELEASE_INFO" | jq -r '.assets[] | select(.name | endswith(".json")) | .browser_download_url' | head -n 1)
-          fi
-
-          PATCH_TAG=$(echo "$RELEASE_INFO" | jq -r '.tag_name')
-
-          if [ -z "$PATCH_URL" ] || [ "$PATCH_URL" = "null" ]; then
-            echo "❌ Failed to find patch bundle in $PATCH_REPO releases!"
-            exit 1
-          fi
-
-          echo "Downloading patch bundle from $PATCH_URL"
           echo "patch_version=$PATCH_TAG" >> $GITHUB_OUTPUT
-          echo "patch_repo=$PATCH_REPO" >> $GITHUB_OUTPUT
-          curl -sL "$PATCH_URL" -o patches.mpp
 
       - name: Apply x-shim PairIP Bypass (XNAV Only)
-        if: matrix.apk_version == '12.2.1'
+        if: matrix.xshim == 'true'
         run: |
           set -o pipefail
           echo "Downloading x-shim bundle directly from GitLab raw..."
@@ -401,15 +456,14 @@ jobs:
           java -jar tools/morphe-cli.jar patch -p x-shim.json -f --continue-on-error -o base-twitter-xshim.apk base-twitter.apk | tee xshim_log.txt
           mv base-twitter-xshim.apk base-twitter.apk
 
-      - name: Patch Twitter (Normal Version)
+      - name: Patch Twitter Base (ONCE)
         run: |
           set -o pipefail
-          FILENAME="Twitter-Piko-${{ matrix.app_token }}-${{ matrix.piko_token }}-v${{ steps.apk_version_step.outputs.apk_version }}-${{ steps.patches.outputs.patch_version }}-arm64-v8a.apk"
-          java -jar tools/morphe-cli.jar patch -p patches.mpp -f --continue-on-error -d "Bring back twitter" -d "Dynamic color" -o "$FILENAME" base-twitter.apk | tee patch_out_normal.txt
+          java -jar tools/morphe-cli.jar patch -p ${{ matrix.patch_file }} -f --continue-on-error -d "Bring back twitter" -d "Dynamic color" -o patched-base.apk base-twitter.apk | tee patch_out.txt
 
-      - name: Strip Permissions & UltraZip (Normal Version)
+      - name: Normal — Strip, UltraZip, Sign
         env:
-          PATCHED_APK_PATH: Twitter-Piko-${{ matrix.app_token }}-${{ matrix.piko_token }}-v${{ steps.apk_version_step.outputs.apk_version }}-${{ steps.patches.outputs.patch_version }}-arm64-v8a.apk
+          PATCHED_APK_PATH: patched-base.apk
           MODE: strip
           APP_TOKEN: ${{ matrix.app_token }}
           PIKO_TOKEN: ${{ matrix.piko_token }}
@@ -419,14 +473,9 @@ jobs:
           set -o pipefail
           python -u scripts/clone_and_strip.py | tee strip_normal_log.txt
 
-      - name: Patch Twitter (Clone Base)
-        run: |
-          set -o pipefail
-          java -jar tools/morphe-cli.jar patch -p patches.mpp -f --continue-on-error -d "Bring back twitter" -d "Dynamic color" -o twitter-patched-clone.apk base-twitter.apk
-
-      - name: Clone, Strip & UltraZip (Clone Version)
+      - name: Clone — Rewrite, Strip, UltraZip, Sign
         env:
-          PATCHED_APK_PATH: twitter-patched-clone.apk
+          PATCHED_APK_PATH: patched-base.apk
           MODE: clone
           APP_TOKEN: ${{ matrix.app_token }}
           PIKO_TOKEN: ${{ matrix.piko_token }}
@@ -440,16 +489,16 @@ jobs:
         run: |
           APPV="${{ steps.apk_version_step.outputs.apk_version }}"
           PATV="${{ steps.patches.outputs.patch_version }}"
-          PREPO="${{ steps.patches.outputs.patch_repo }}"
+          PSRC="${{ matrix.patch_source }}"
           NF="Twitter-Piko-${{ matrix.app_token }}-${{ matrix.piko_token }}-v$APPV-$PATV-arm64-v8a.apk"
           CF="Twitter-Z2-Piko-${{ matrix.app_token }}-${{ matrix.piko_token }}-v$APPV-$PATV-arm64-v8a.apk"
           {
-            echo "### ${{ matrix.app_token }} app + ${{ matrix.piko_token }}"
+            echo "### ${{ matrix.app_token }} + ${{ matrix.piko_token }} (bundle: $PSRC)"
             echo ""
-            echo "- **App version:** v$APPV | **Piko bundle:** $PATV (from \`$PREPO\`) | **Arch:** arm64-v8a | **Density:** xhdpi/nodpi"
+            echo "- **App version:** v$APPV | **Patch bundle:** $PATV | **Arch:** arm64-v8a | **Density:** xhdpi/nodpi"
             echo ""
             if [ -f xshim_log.txt ]; then
-              echo "🛡️ **x-shim PairIP bypass applied first (v12.2.1 only):**"
+              echo "🛡️ **x-shim PairIP bypass applied first:**"
               grep "INFO: Applied:" xshim_log.txt | sed 's/.*INFO: Applied: */- /' || true
               echo ""
             fi
@@ -466,10 +515,10 @@ jobs:
             echo "</details>"
             echo ""
             echo "**Applied patches:**"
-            grep "INFO: Applied:" patch_out_normal.txt | sed 's/.*INFO: Applied: */- /' || true
+            grep "INFO: Applied:" patch_out.txt | sed 's/.*INFO: Applied: */- /' || true
             echo ""
             echo "**Not applied (incompatible or failed):**"
-            grep -h "WARNING: Skipping\|SEVERE: FAILED:" patch_out_normal.txt | sed 's/.*WARNING: Skipping: */- /; s/.*SEVERE: FAILED: */- /' || true
+            grep -h "WARNING: Skipping\|SEVERE: FAILED:" patch_out.txt | sed 's/.*WARNING: Skipping: */- /; s/.*SEVERE: FAILED: */- /' || true
             echo ""
             echo "#### $CF"
             echo ""
