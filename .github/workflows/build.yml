@@ -22,53 +22,48 @@ jobs:
           - variant: xnav-stable
             app_token: XNAV
             piko_token: StablePiko
-            apk_source: storage
-            storage_tag: v12.2.1-storage
+            storage_tag: Twitter-stock-apk
+            storage_pattern: "*12.2.1*"
+            storage_optional: "false"
             expect_prefix: "12.2.1"
             xshim: "true"
-            patch_source: piko
-            patch_channel: stable
-            patch_file: patches.mpp
+            patch_source: piko-stable
           - variant: xnav-dev
             app_token: XNAV
             piko_token: DevPiko
-            apk_source: storage
-            storage_tag: v12.2.1-storage
+            storage_tag: Twitter-stock-apk
+            storage_pattern: "*12.2.1*"
+            storage_optional: "false"
             expect_prefix: "12.2.1"
             xshim: "true"
-            patch_source: piko
-            patch_channel: prerelease
-            patch_file: patches.mpp
+            patch_source: piko-dev
           - variant: classic-stable
             app_token: Classic
             piko_token: StablePiko
-            apk_source: storage
-            storage_tag: v12.19.1-storage
+            storage_tag: Twitter-stock-apk
+            storage_pattern: "*12.19.1*"
+            storage_optional: "false"
             expect_prefix: "12.19.1"
             xshim: "false"
-            patch_source: piko
-            patch_channel: stable
-            patch_file: patches.mpp
+            patch_source: piko-stable
           - variant: classic-dev
             app_token: Classic
             piko_token: DevPiko
-            apk_source: storage
-            storage_tag: v12.19.1-storage
+            storage_tag: Twitter-stock-apk
+            storage_pattern: "*12.19.1*"
+            storage_optional: "false"
             expect_prefix: "12.19.1"
             xshim: "false"
-            patch_source: piko
-            patch_channel: prerelease
-            patch_file: patches.mpp
+            patch_source: piko-dev
           - variant: newx
             app_token: NewX
             piko_token: NewX
-            apk_source: apkeep
-            storage_tag: ""
+            storage_tag: Twitter-stock-apk
+            storage_pattern: "*12.25.0*"
+            storage_optional: "true"
             expect_prefix: ""
             xshim: "false"
             patch_source: newx
-            patch_channel: ""
-            patch_file: patches.json
 
     steps:
       - name: Checkout Repository
@@ -344,13 +339,19 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           mkdir -p download_dir
-          if [ "${{ matrix.apk_source }}" = "storage" ]; then
-            gh release download "${{ matrix.storage_tag }}" --pattern "*.apkm" --pattern "*.xapk" --pattern "*.apk" --dir download_dir || {
-              echo "❌ Storage release '${{ matrix.storage_tag }}' missing or empty."
-              echo "   Create a release with tag '${{ matrix.storage_tag }}' and upload the Twitter bundle (.apkm/.xapk/.apk) for this version."
-              exit 1
-            }
-          else
+          if [ -n "${{ matrix.storage_tag }}" ]; then
+            if gh release download "${{ matrix.storage_tag }}" --pattern "${{ matrix.storage_pattern }}.apkm" --pattern "${{ matrix.storage_pattern }}.xapk" --pattern "${{ matrix.storage_pattern }}.apk" --dir download_dir; then
+              echo "✅ Using storage bundle: ${{ matrix.storage_tag }} (pattern: ${{ matrix.storage_pattern }})"
+            else
+              if [ "${{ matrix.storage_optional }}" = "true" ]; then
+                echo "⚠️ Storage tag '${{ matrix.storage_tag }}' missing pattern '${{ matrix.storage_pattern }}' — falling back to stores..."
+              else
+                echo "❌ Storage release '${{ matrix.storage_tag }}' missing or missing pattern '${{ matrix.storage_pattern }}'."
+                exit 1
+              fi
+            fi
+          fi
+          if ! find download_dir -type f \( -name "*.apk" -o -name "*.xapk" -o -name "*.apkm" \) | grep -q .; then
             echo "Trying APKPure (up to 3 attempts)..."
             for i in 1 2 3; do
               if apkeep -a com.twitter.android -d apk-pure download_dir; then break; fi
@@ -389,19 +390,6 @@ jobs:
           VERSION=$(aapt dump badging base-twitter.apk | grep "versionName" | head -n 1 | sed -E "s/.*versionName='([^']+)'.*/\1/")
           echo "Base APK version: $VERSION"
 
-          THRESH="12.19.1-release.0"
-          HIGHEST=$(printf "%s\n%s" "$VERSION" "$THRESH" | sort -V | tail -n 1)
-          if [ "${{ matrix.patch_source }}" = "piko" ]; then
-            if [ "$HIGHEST" != "$THRESH" ] && [ "$VERSION" != "$THRESH" ]; then
-              echo "❌ Old piko bundle only supports up to 12.19.1, but base APK is $VERSION"
-              exit 1
-            fi
-          else
-            if [ "$HIGHEST" = "$THRESH" ] || [ "$VERSION" = "$THRESH" ]; then
-              echo "❌ NewX bundle requires an app newer than 12.19.1, but base APK is $VERSION"
-              exit 1
-            fi
-          fi
           if [ -n "${{ matrix.expect_prefix }}" ]; then
             case "$VERSION" in
               "${{ matrix.expect_prefix }}"*) ;;
@@ -412,6 +400,18 @@ jobs:
                 ;;
             esac
           fi
+
+          if [ "${{ matrix.patch_source }}" = "newx" ]; then
+            if [[ "$VERSION" != *"-prod"* ]]; then
+              echo "❌ NewX requires a -prod build, but got $VERSION"
+              exit 1
+            fi
+          else
+            if [[ "$VERSION" != *"-release"* ]]; then
+              echo "❌ Piko (Stable/Dev) requires a -release build, but got $VERSION"
+              exit 1
+            fi
+          fi
           echo "✅ Base APK version verified: $VERSION"
           echo "apk_version=$VERSION" >> $GITHUB_OUTPUT
 
@@ -421,29 +421,26 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           if [ "${{ matrix.patch_source }}" = "newx" ]; then
-            echo "Using crimera/piko-newx (raw main bundle)"
-            curl -fsSL "https://raw.githubusercontent.com/crimera/piko-newx/main/patches-bundle.json" -o patches.json || {
-              echo "❌ Failed to download piko-newx bundle"
-              exit 1
-            }
-            PATCH_TAG=$(curl -sL -H "Authorization: token $GITHUB_TOKEN" "https://api.github.com/repos/crimera/piko-newx/commits/main" | jq -r '.sha[0:7]')
+            URL="https://raw.githubusercontent.com/crimera/piko-newx/main/patches-bundle.json"
+            BRANCH="main"
+            REPO="crimera/piko-newx"
+          elif [ "${{ matrix.patch_source }}" = "piko-dev" ]; then
+            URL="https://raw.githubusercontent.com/crimera/piko/dev/patches-bundle.json"
+            BRANCH="dev"
+            REPO="crimera/piko"
           else
-            if [ "${{ matrix.patch_channel }}" = "prerelease" ]; then
-              RELEASE_INFO=$(curl -sL -H "Authorization: token $GITHUB_TOKEN" "https://api.github.com/repos/crimera/piko/releases" | jq -r '.[0]')
-            else
-              RELEASE_INFO=$(curl -sL -H "Authorization: token $GITHUB_TOKEN" "https://api.github.com/repos/crimera/piko/releases/latest")
-            fi
-            PATCH_URL=$(echo "$RELEASE_INFO" | jq -r '.assets[] | select(.name | endswith(".mpp")) | .browser_download_url' | head -n 1)
-            if [ -z "$PATCH_URL" ] || [ "$PATCH_URL" = "null" ]; then
-              PATCH_URL=$(echo "$RELEASE_INFO" | jq -r '.assets[] | select(.name | endswith(".json")) | .browser_download_url' | head -n 1)
-            fi
-            PATCH_TAG=$(echo "$RELEASE_INFO" | jq -r '.tag_name')
-            if [ -z "$PATCH_URL" ] || [ "$PATCH_URL" = "null" ]; then
-              echo "❌ Failed to find patch bundle in crimera/piko releases!"
-              exit 1
-            fi
-            curl -sL "$PATCH_URL" -o patches.mpp
+            URL="https://raw.githubusercontent.com/crimera/piko/main/patches-bundle.json"
+            BRANCH="main"
+            REPO="crimera/piko"
           fi
+
+          echo "Downloading patch bundle from $URL"
+          curl -fsSL "$URL" -o patches.json || {
+            echo "❌ Failed to download patch bundle"
+            exit 1
+          }
+
+          PATCH_TAG=$(curl -sL -H "Authorization: token $GITHUB_TOKEN" "https://api.github.com/repos/${REPO}/commits/${BRANCH}" | jq -r '.sha[0:7]')
           echo "patch_version=$PATCH_TAG" >> $GITHUB_OUTPUT
 
       - name: Apply x-shim PairIP Bypass (XNAV Only)
@@ -459,7 +456,7 @@ jobs:
       - name: Patch Twitter Base (ONCE)
         run: |
           set -o pipefail
-          java -jar tools/morphe-cli.jar patch -p ${{ matrix.patch_file }} -f --continue-on-error -d "Bring back twitter" -d "Dynamic color" -o patched-base.apk base-twitter.apk | tee patch_out.txt
+          java -jar tools/morphe-cli.jar patch -p patches.json -f --continue-on-error -d "Bring back twitter" -d "Dynamic color" -o patched-base.apk base-twitter.apk | tee patch_out.txt
 
       - name: Normal — Strip, UltraZip, Sign
         env:
