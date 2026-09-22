@@ -521,40 +521,37 @@ jobs:
       - name: Patch Twitter Base (Piko + Nai, ONCE)
         run: |
           set -o pipefail
-          echo "--- Morphe patch --help (for flag verification) ---"
-          java -jar tools/morphe-cli.jar patch --help > morphe_help.txt 2>&1 || true
-          cat morphe_help.txt
           echo "--- Starting patch run ---"
           java -jar tools/morphe-cli.jar patch \
             -p patches.mpp \
             -p nai.mpp \
-            --options nai-options.json \
-            --include "Disable Root Checks" \
-            --include "Empty Clipboard Report" \
-            --include "Hide Clipboard" \
-            --include "Hide Clipboard Description" \
-            --include "Spoof SIM Country" \
-            --include "Spoof SIM Operator" \
-            --include "Spoof SIM Operator Name" \
-            --include "Spoof SIM Serial Number" \
-            --include "Limit Ad Tracking" \
-            --include "Spoof Tracking IDs" \
-            --include "Disable Telemetry" \
-            --include "Disable Crash Reporters" \
-            --include "Remove Ad Services Entries" \
-            --include "Strip Exif Location" \
-            --include "Spoof Last Known Location" \
-            --include "Spoof Play Store Install Source" \
-            --include "Spoof Subscriber ID" \
-            --include "Spoof Phone Number" \
-            --include "Spoof Voice Mail" \
-            --include "Hide Roaming Status" \
-            --include "Spoof Time Zone" \
-            --include "Spoof Locale" \
-            --include "Disable Firebase Auto-Init" \
-            --include "Disable Firebase Performance" \
-            --include "Disable Remote Config Fetch" \
-            --include "Bypass VPN Detection" \
+            --options-file nai-options.json \
+            -e "Disable Root Checks" \
+            -e "Empty Clipboard Report" \
+            -e "Hide Clipboard" \
+            -e "Hide Clipboard Description" \
+            -e "Spoof SIM Country" \
+            -e "Spoof SIM Operator" \
+            -e "Spoof SIM Operator Name" \
+            -e "Spoof SIM Serial Number" \
+            -e "Limit Ad Tracking" \
+            -e "Spoof Tracking IDs" \
+            -e "Disable Telemetry" \
+            -e "Disable Crash Reporters" \
+            -e "Remove Ad Services Entries" \
+            -e "Strip Exif Location" \
+            -e "Spoof Last Known Location" \
+            -e "Spoof Play Store Install Source" \
+            -e "Spoof Subscriber ID" \
+            -e "Spoof Phone Number" \
+            -e "Spoof Voice Mail" \
+            -e "Hide Roaming Status" \
+            -e "Spoof Time Zone" \
+            -e "Spoof Locale" \
+            -e "Disable Firebase Auto-Init" \
+            -e "Disable Firebase Performance" \
+            -e "Disable Remote Config Fetch" \
+            -e "Bypass VPN Detection" \
             -f --continue-on-error \
             -d "Bring back twitter" -d "Dynamic color" \
             -o patched-base.apk base-twitter.apk | tee patch_out.txt
