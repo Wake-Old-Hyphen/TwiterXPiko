@@ -28,6 +28,7 @@ jobs:
             expect_prefix: "12.2.1"
             xshim: "true"
             patch_source: piko-stable
+            extra_perms: ""
           - variant: xnav-dev
             app_token: XNAV
             piko_token: DevPiko
@@ -37,6 +38,7 @@ jobs:
             expect_prefix: "12.2.1"
             xshim: "true"
             patch_source: piko-dev
+            extra_perms: ""
           - variant: classic-stable
             app_token: Classic
             piko_token: StablePiko
@@ -46,6 +48,7 @@ jobs:
             expect_prefix: "12.19.1"
             xshim: "false"
             patch_source: piko-stable
+            extra_perms: ""
           - variant: classic-dev
             app_token: Classic
             piko_token: DevPiko
@@ -55,6 +58,7 @@ jobs:
             expect_prefix: "12.19.1"
             xshim: "false"
             patch_source: piko-dev
+            extra_perms: ""
           - variant: newx
             app_token: NewX
             piko_token: NewX
@@ -64,6 +68,7 @@ jobs:
             expect_prefix: ""
             xshim: "false"
             patch_source: newx
+            extra_perms: "android.permission.CHANGE_NETWORK_STATE"
 
     steps:
       - name: Checkout Repository
@@ -87,9 +92,12 @@ jobs:
           OLD_PACKAGE = "com.twitter.android"
           NEW_APP_NAME = "Z²"
           ANDROID = "{http://schemas.android.com/apk/res/android}"
-          ALLOWED_PERMISSIONS = ["android.permission.FOREGROUND_SERVICE", "android.permission.FOREGROUND_SERVICE_DATA_SYNC", "android.permission.INTERNET", "android.permission.ACCESS_NETWORK_STATE", "android.permission.ACCESS_WIFI_STATE"]
+          BASE_PERMISSIONS = ["android.permission.FOREGROUND_SERVICE", "android.permission.FOREGROUND_SERVICE_DATA_SYNC", "android.permission.INTERNET", "android.permission.ACCESS_NETWORK_STATE", "android.permission.ACCESS_WIFI_STATE"]
+          EXTRA = [p.strip() for p in os.environ.get("EXTRA_PERMISSIONS", "").split(",") if p.strip()]
+          ALLOWED_PERMISSIONS = BASE_PERMISSIONS + EXTRA
 
           def main():
+              print("Allowed permissions for this build: " + ", ".join(ALLOWED_PERMISSIONS))
               mode = os.environ.get("MODE", "clone")
               apk_file = os.environ.get("PATCHED_APK_PATH", "patched-base.apk")
               if not os.path.exists(apk_file):
@@ -434,7 +442,6 @@ jobs:
             exit 1
           }
 
-          # Recursively search the JSON for any string ending in .mpp (the download URL)
           MPP_URL=$(jq -r '.. | strings | select(endswith(".mpp"))' bundle.json | head -n 1)
           if [ -z "$MPP_URL" ] || [ "$MPP_URL" = "null" ]; then
             echo "❌ Could not find .mpp download URL in bundle.json"
@@ -456,30 +463,101 @@ jobs:
 
           echo "patch_version=$PATCH_TAG" >> $GITHUB_OUTPUT
 
+      - name: Download Nai Privacy Bundle
+        run: |
+          echo "Fetching Nai's Extra Patches manifest..."
+          curl -fsSL "https://raw.githubusercontent.com/Nai64/Nai64ExtraPatches/refs/heads/main/patches-bundle.json" -o nai-bundle.json || {
+            echo "❌ Failed to download Nai bundle manifest"
+            exit 1
+          }
+          NAI_URL=$(jq -r '.. | strings | select(endswith(".mpp"))' nai-bundle.json | head -n 1)
+          if [ -z "$NAI_URL" ] || [ "$NAI_URL" = "null" ]; then
+            echo "❌ Could not find .mpp download URL in nai-bundle.json"
+            cat nai-bundle.json
+            exit 1
+          fi
+          echo "Downloading Nai .mpp from $NAI_URL"
+          curl -fsSL "$NAI_URL" -o nai.mpp || {
+            echo "❌ Failed to download Nai .mpp file"
+            exit 1
+          }
+
+      - name: Write Nai Options File
+        run: |
+          cat << 'JSONEOF' > nai-options.json
+          [
+            { "patchName": "Spoof SIM Country", "options": [ { "key": "spoofSimCountryIso", "value": "nl" } ] },
+            { "patchName": "Spoof SIM Operator", "options": [ { "key": "spoofSimOperatorMccMnc", "value": "20408" } ] },
+            { "patchName": "Spoof SIM Operator Name", "options": [ { "key": "spoofSimOperatorName", "value": "KPN" } ] },
+            { "patchName": "Spoof SIM Serial Number", "options": [ { "key": "simSerial", "value": "8931084206518391742" } ] },
+            { "patchName": "Spoof Subscriber ID", "options": [ { "key": "subscriberId", "value": "204081234567890" } ] },
+            { "patchName": "Spoof Phone Number", "options": [ { "key": "phoneNumber", "value": "" } ] },
+            { "patchName": "Spoof Time Zone", "options": [ { "key": "timeZoneId", "value": "Europe/Amsterdam" } ] },
+            { "patchName": "Spoof Locale", "options": [ { "key": "spoofLocaleTag", "value": "en-US" } ] }
+          ]
+          JSONEOF
+          python -c "import json; json.load(open('nai-options.json')); print('Nai options JSON OK')"
+
       - name: Apply x-shim PairIP Bypass (XNAV Only)
         if: matrix.xshim == 'true'
         run: |
           set -o pipefail
           echo "Fetching x-shim bundle manifest from GitLab..."
           curl -fsSL "https://gitlab.com/inotia00/x-shim/-/raw/main/patches-bundle.json?ref_type=heads" -o x-shim-bundle.json
-          
+
           MPP_URL=$(jq -r '.. | strings | select(endswith(".mpp"))' x-shim-bundle.json | head -n 1)
           if [ -z "$MPP_URL" ] || [ "$MPP_URL" = "null" ]; then
             echo "❌ Could not find x-shim .mpp URL in GitLab manifest"
             exit 1
           fi
-          
+
           echo "Downloading x-shim .mpp from $MPP_URL"
           curl -fsSL "$MPP_URL" -o x-shim.mpp
-          
+
           echo "Applying x-shim..."
           java -jar tools/morphe-cli.jar patch -p x-shim.mpp -f --continue-on-error -o base-twitter-xshim.apk base-twitter.apk | tee xshim_log.txt
           mv base-twitter-xshim.apk base-twitter.apk
 
-      - name: Patch Twitter Base (ONCE)
+      - name: Patch Twitter Base (Piko + Nai, ONCE)
         run: |
           set -o pipefail
-          java -jar tools/morphe-cli.jar patch -p patches.mpp -f --continue-on-error -d "Bring back twitter" -d "Dynamic color" -o patched-base.apk base-twitter.apk | tee patch_out.txt
+          echo "--- Morphe patch --help (for flag verification) ---"
+          java -jar tools/morphe-cli.jar patch --help > morphe_help.txt 2>&1 || true
+          cat morphe_help.txt
+          echo "--- Starting patch run ---"
+          java -jar tools/morphe-cli.jar patch \
+            -p patches.mpp \
+            -p nai.mpp \
+            --options nai-options.json \
+            --include "Disable Root Checks" \
+            --include "Empty Clipboard Report" \
+            --include "Hide Clipboard" \
+            --include "Hide Clipboard Description" \
+            --include "Spoof SIM Country" \
+            --include "Spoof SIM Operator" \
+            --include "Spoof SIM Operator Name" \
+            --include "Spoof SIM Serial Number" \
+            --include "Limit Ad Tracking" \
+            --include "Spoof Tracking IDs" \
+            --include "Disable Telemetry" \
+            --include "Disable Crash Reporters" \
+            --include "Remove Ad Services Entries" \
+            --include "Strip Exif Location" \
+            --include "Spoof Last Known Location" \
+            --include "Spoof Play Store Install Source" \
+            --include "Spoof Subscriber ID" \
+            --include "Spoof Phone Number" \
+            --include "Spoof Voice Mail" \
+            --include "Hide Roaming Status" \
+            --include "Spoof Time Zone" \
+            --include "Spoof Locale" \
+            --include "Disable Firebase Auto-Init" \
+            --include "Disable Firebase Performance" \
+            --include "Disable Remote Config Fetch" \
+            --include "Bypass VPN Detection" \
+            -f --continue-on-error \
+            -d "Bring back twitter" -d "Dynamic color" \
+            -o patched-base.apk base-twitter.apk | tee patch_out.txt
 
       - name: Normal — Strip, UltraZip, Sign
         env:
@@ -489,6 +567,7 @@ jobs:
           PIKO_TOKEN: ${{ matrix.piko_token }}
           APK_VERSION: ${{ steps.apk_version_step.outputs.apk_version }}
           PATCH_VERSION: ${{ steps.patches.outputs.patch_version }}
+          EXTRA_PERMISSIONS: ${{ matrix.extra_perms }}
         run: |
           set -o pipefail
           python -u scripts/clone_and_strip.py | tee strip_normal_log.txt
@@ -501,6 +580,7 @@ jobs:
           PIKO_TOKEN: ${{ matrix.piko_token }}
           APK_VERSION: ${{ steps.apk_version_step.outputs.apk_version }}
           PATCH_VERSION: ${{ steps.patches.outputs.patch_version }}
+          EXTRA_PERMISSIONS: ${{ matrix.extra_perms }}
         run: |
           set -o pipefail
           python -u scripts/clone_and_strip.py | tee clone_log.txt
@@ -513,7 +593,7 @@ jobs:
           NF="Twitter-Piko-${{ matrix.app_token }}-${{ matrix.piko_token }}-v$APPV-$PATV-arm64-v8a.apk"
           CF="Twitter-Z2-Piko-${{ matrix.app_token }}-${{ matrix.piko_token }}-v$APPV-$PATV-arm64-v8a.apk"
           {
-            echo "### ${{ matrix.app_token }} + ${{ matrix.piko_token }} (bundle: $PSRC)"
+            echo "### ${{ matrix.app_token }} + ${{ matrix.piko_token }} (bundle: $PSRC + Nai privacy profile)"
             echo ""
             echo "- **App version:** v$APPV | **Patch bundle:** $PATV | **Arch:** arm64-v8a | **Density:** xhdpi/nodpi"
             echo ""
