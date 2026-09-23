@@ -486,14 +486,14 @@ jobs:
         run: |
           cat << 'JSONEOF' > nai-options.json
           [
-            { "patchName": "Spoof SIM Country", "options": [ { "key": "spoofSimCountryIso", "value": "nl" } ] },
-            { "patchName": "Spoof SIM Operator", "options": [ { "key": "spoofSimOperatorMccMnc", "value": "20408" } ] },
-            { "patchName": "Spoof SIM Operator Name", "options": [ { "key": "spoofSimOperatorName", "value": "KPN" } ] },
-            { "patchName": "Spoof SIM Serial Number", "options": [ { "key": "simSerial", "value": "8931084206518391742" } ] },
-            { "patchName": "Spoof Subscriber ID", "options": [ { "key": "subscriberId", "value": "204081234567890" } ] },
-            { "patchName": "Spoof Phone Number", "options": [ { "key": "phoneNumber", "value": "" } ] },
-            { "patchName": "Spoof Time Zone", "options": [ { "key": "timeZoneId", "value": "Europe/Amsterdam" } ] },
-            { "patchName": "Spoof Locale", "options": [ { "key": "spoofLocaleTag", "value": "en-US" } ] }
+            { "name": "Spoof SIM Country", "options": { "spoofSimCountryIso": "nl" } },
+            { "name": "Spoof SIM Operator", "options": { "spoofSimOperatorMccMnc": "20408" } },
+            { "name": "Spoof SIM Operator Name", "options": { "spoofSimOperatorName": "KPN" } },
+            { "name": "Spoof SIM Serial Number", "options": { "simSerial": "8931084206518391742" } },
+            { "name": "Spoof Subscriber ID", "options": { "subscriberId": "204081234567890" } },
+            { "name": "Spoof Phone Number", "options": { "phoneNumber": "" } },
+            { "name": "Spoof Time Zone", "options": { "timeZoneId": "Europe/Amsterdam" } },
+            { "name": "Spoof Locale", "options": { "spoofLocaleTag": "en-US" } }
           ]
           JSONEOF
           python -c "import json; json.load(open('nai-options.json')); print('Nai options JSON OK')"
