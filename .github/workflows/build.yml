@@ -482,21 +482,69 @@ jobs:
             exit 1
           }
 
-      - name: Write Nai Options File
+      - name: Generate Base Option Schema
         run: |
-          cat << 'JSONEOF' > nai-options.json
-          [
-            { "name": "Spoof SIM Country", "options": { "spoofSimCountryIso": "nl" } },
-            { "name": "Spoof SIM Operator", "options": { "spoofSimOperatorMccMnc": "20408" } },
-            { "name": "Spoof SIM Operator Name", "options": { "spoofSimOperatorName": "KPN" } },
-            { "name": "Spoof SIM Serial Number", "options": { "simSerial": "8931084206518391742" } },
-            { "name": "Spoof Subscriber ID", "options": { "subscriberId": "204081234567890" } },
-            { "name": "Spoof Phone Number", "options": { "phoneNumber": "" } },
-            { "name": "Spoof Time Zone", "options": { "timeZoneId": "Europe/Amsterdam" } },
-            { "name": "Spoof Locale", "options": { "spoofLocaleTag": "en-US" } }
-          ]
-          JSONEOF
-          python -c "import json; json.load(open('nai-options.json')); print('Nai options JSON OK')"
+          echo "Generating valid blank options schema from Morphe CLI..."
+          java -jar tools/morphe-cli.jar options-create -p patches.mpp -p nai.mpp -o nai-options-base.json || true
+          echo "--- Base Schema Content ---"
+          cat nai-options-base.json || echo "Failed to generate base schema"
+
+      - name: Inject Nai Values into Options File
+        run: |
+          cat << 'PYEOF' > inject_options.py
+          import json
+
+          TARGETS = {
+              "Spoof SIM Country": {"spoofSimCountryIso": "nl"},
+              "Spoof SIM Operator": {"spoofSimOperatorMccMnc": "20408"},
+              "Spoof SIM Operator Name": {"spoofSimOperatorName": "KPN"},
+              "Spoof SIM Serial Number": {"simSerial": "8931084206518391742"},
+              "Spoof Subscriber ID": {"subscriberId": "204081234567890"},
+              "Spoof Phone Number": {"phoneNumber": ""},
+              "Spoof Time Zone": {"timeZoneId": "Europe/Amsterdam"},
+              "Spoof Locale": {"spoofLocaleTag": "en-US"}
+          }
+
+          with open('nai-options-base.json', 'r') as f:
+              data = json.load(f)
+
+          if isinstance(data, list) and len(data) > 0:
+              print(f"Schema type: list of dicts. First element keys: {list(data[0].keys())}")
+          elif isinstance(data, dict):
+              print(f"Schema type: dict. Top level keys (first 5): {list(data.keys())[:5]}")
+
+          modified = False
+          if isinstance(data, list):
+              for item in data:
+                  patch_name = None
+                  for k, v in item.items():
+                      if k != 'options' and isinstance(v, str):
+                          patch_name = v
+                          break
+                  if patch_name and patch_name in TARGETS:
+                      if 'options' not in item:
+                          item['options'] = {}
+                      item['options'].update(TARGETS[patch_name])
+                      modified = True
+          elif isinstance(data, dict):
+              for patch_name, item in data.items():
+                  if patch_name in TARGETS:
+                      if 'options' not in item:
+                          item['options'] = {}
+                      item['options'].update(TARGETS[patch_name])
+                      modified = True
+
+          with open('nai-options.json', 'w') as f:
+              json.dump(data, f, indent=2)
+
+          if modified:
+              print("Successfully injected Nai options into base schema.")
+          else:
+              print("WARNING: Could not find target patches in base schema.")
+          PYEOF
+          python inject_options.py
+          echo "--- Final Options Content (first 500 chars) ---"
+          head -c 500 nai-options.json
 
       - name: Apply x-shim PairIP Bypass (XNAV Only)
         if: matrix.xshim == 'true'
