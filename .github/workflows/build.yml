@@ -233,12 +233,22 @@ jobs:
               ultra_apk = "twitter-ultra.apk"
               print("Applying UltraZip compression (Level 9, resources.arsc stored)...")
               with zipfile.ZipFile(processed_apk, 'r') as zin, zipfile.ZipFile(ultra_apk, 'w', zipfile.ZIP_DEFLATED, compresslevel=9) as zout:
+                  written = set()
                   for item in zin.infolist():
                       data = zin.read(item.filename)
                       if item.filename == "resources.arsc":
                           zout.writestr(item, data, compress_type=zipfile.ZIP_STORED)
                       else:
                           zout.writestr(item, data, compress_type=zipfile.ZIP_DEFLATED, compresslevel=9)
+                      written.add(item.filename)
+                  restored = 0
+                  with zipfile.ZipFile(apk_file, 'r') as zsrc:
+                      for item in zsrc.infolist():
+                          if item.filename.startswith("META-INF/services/") and item.filename not in written:
+                              zout.writestr(item, zsrc.read(item.filename), compress_type=zipfile.ZIP_DEFLATED, compresslevel=9)
+                              written.add(item.filename)
+                              restored += 1
+                  print("Restored " + str(restored) + " META-INF/services entries from patched base")
 
               aligned_apk = "twitter-aligned.apk"
               print("Zipaligning APK (page-aligned natives)...")
@@ -560,7 +570,7 @@ jobs:
           fi
 
           echo "Downloading x-shim .mpp from $MPP_URL"
-          curl -fsSL "$MPP_URL" -o x-shim.mpp
+          curl -fsL "$MPP_URL" -o x-shim.mpp
 
           echo "Applying x-shim..."
           java -jar tools/morphe-cli.jar patch -p x-shim.mpp -f --continue-on-error -o base-twitter-xshim.apk base-twitter.apk | tee xshim_log.txt
